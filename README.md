@@ -1,2 +1,5 @@
 # sublime-coloraide
-ColorAide dependency for Sublime Text
+
+ColorAide dependency for Sublime Text.
+
+In alpha.
