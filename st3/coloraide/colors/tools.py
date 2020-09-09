@@ -1,6 +1,7 @@
 """Color tools."""
 from .. import util
 from ..util import convert
+import math
 
 WHITE = [1.0] * 3
 BLACK = [0.0] * 3
@@ -23,6 +24,26 @@ def calc_luminance(srgb):
 class _ColorTools:
     """Color utilities."""
 
+    def is_achromatic(self):
+        """Check if the color is achromatic."""
+
+        return self._is_achromatic(self.coords())
+
+    def _is_achromatic(self, coords):
+        """
+        Is achromatic.
+
+        A consistent way to come up with a way to check achromatic. This basically
+        uses the Lab color space to do the check. The idea came from: https://github.com/LeaVerou/color.js.
+
+        It isn't exactly perfect, but technically no way is when converting a color across different spaces.
+        With this approach, Lab is bigger than RGB based color spaces, so there will be no clipping.
+        It is reasonably close though.
+        """
+
+        a, b = convert.convert(coords, self.space(), "lab")[1:]
+        return abs(a) < util.ZERO_POINT and abs(b) < util.ZERO_POINT
+
     def _mix_channel(self, c1, c2, f1, f2=1.0):
         """
         Blend the channel.
@@ -33,10 +54,17 @@ class _ColorTools:
         as we normally overlay a transparent color on an opaque one.
         """
 
-        return abs(c1 * f1 + c2 * f2 * (1 - f1))
+        return abs(c2 * f1 + c1 * f2 * (1 - f1))
 
     def _hue_mix_channel(self, c1, c2, f1, f2=1.0, scale=360.0):
         """Blend the hue style channel."""
+
+        if math.isnan(c1) and math.isnan(c2):
+            return 0.0
+        elif math.isnan(c1):
+            return c2
+        elif math.isnan(c2):
+            return c1
 
         c1 *= scale
         c2 *= scale
@@ -69,46 +97,49 @@ class _ColorTools:
         lum2 = color.luminance()
         ratio = calc_contrast_ratio(lum1, lum2)
 
-        if target <= 0:
-            self.mutate(color)
+        # We already meet the minimum or the target is impossible
+        if target < 1 or ratio >= target:
             return
 
         required_lum = ((lum2 + 0.05) / target) - 0.05
         if required_lum < 0:
             required_lum = target * (lum2 + 0.05) - 0.05
 
-        if ratio < target:
-            mix = self.new(WHITE if lum2 < lum1 else BLACK, "srgb")
+        is_dark = lum2 < lum1
+        mix = self.new(WHITE if is_dark else BLACK, "srgb")
+        if is_dark:
+            min_mix = 0.0
+            max_mix = 1.0
+            last_lum = 1.0
         else:
-            mix = color.convert("srgb")
-
-        min_mix = 0.0
-        max_mix = 1.0
+            max_mix = 0.0
+            min_mix = 1.0
+            last_lum = 0.0
+        last_mix = 1.0
 
         temp = self.clone().convert("srgb")
-        r, g, b = temp._cr, temp._cg, temp._cb
-
-        last_lum = util.INF
-        last_mix = 0
+        c1, c2, c3 = temp.coords()
 
         while abs(min_mix - max_mix) > 0.001:
             mid_mix = (max_mix + min_mix) / 2
 
-            temp._mix([r, g, b], mix.coords(), mid_mix)
-
+            temp._mix([c1, c2, c3], mix.coords(), mid_mix)
             lum2 = temp.luminance()
 
             if lum2 > required_lum:
-                min_mix = mid_mix
-            else:
                 max_mix = mid_mix
+            else:
+                min_mix = mid_mix
 
-            if lum2 >= required_lum and lum2 < last_lum:
+            if (
+                (is_dark and lum2 >= required_lum and lum2 < last_lum) or
+                (not is_dark and lum2 <= required_lum and lum2 > last_lum)
+            ):
                 last_lum = lum2
                 last_mix = mid_mix
 
         # Use the best, last values
-        temp._mix([r, g, b], mix.coords(), last_mix)
+        temp._mix([c1, c2, c3], mix.coords(), last_mix)
         self.mutate(temp)
 
     def contrast_ratio(self, color):
@@ -142,7 +173,7 @@ class _ColorTools:
         if self._alpha < 1.0:
             # Blend the channels using the alpha channel values as the factors
             # Afterwards, blend the alpha channels. This is different than blend.
-            self._mix(background, self._alpha, background._alpha)
+            self._mix(self.coords(), background.coords(), self._alpha, background._alpha)
             self._alpha = self._alpha + background._alpha * (1.0 - self._alpha)
         return self
 
