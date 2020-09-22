@@ -1,70 +1,23 @@
 """Colors."""
-from .srgb import _SRGB
-from .hsl import _HSL
-from .hwb import _HWB
-from .lab import _LAB
-from .lch import _LCH
+from .srgb import SRGB
+from .hsl import HSL
+from .hwb import HWB
+from .lab import LAB
+from .lch import LCH
+from ...colors import HSV
+from ...colors import Display_P3
+from ...colors import A98_RGB
+from ...colors import ProPhoto_RGB
+from ...colors import Rec_2020
+from ...colors import Color as GenericColor
 
-__all__ = ("SRGB", "HSL", "HWB", "LAB", "LCH")
-
-CS_MAP = {}
-
-
-class SRGB(_SRGB):
-    """RGB color class."""
-
-    spaces = CS_MAP
-
-    def __init__(self, color=_SRGB.DEF_BG):
-        """Initialize."""
-
-        super().__init__(color)
+SUPPORTED = (
+    HSL, HWB, LAB, LCH, SRGB, HSV,
+    Display_P3, A98_RGB, ProPhoto_RGB, Rec_2020
+)
 
 
-class HSL(_HSL):
-    """HSL color class."""
+class Color(GenericColor):
+    """Color wrapper class."""
 
-    spaces = CS_MAP
-
-    def __init__(self, color=_HSL.DEF_BG):
-        """Initialize."""
-
-        super().__init__(color)
-
-
-class HWB(_HWB):
-    """HWB color class."""
-
-    spaces = CS_MAP
-
-    def __init__(self, color=_HWB.DEF_BG):
-        """Initialize."""
-
-        super().__init__(color)
-
-
-class LAB(_LAB):
-    """HWB color class."""
-
-    spaces = CS_MAP
-
-    def __init__(self, color=_LAB.DEF_BG):
-        """Initialize."""
-
-        super().__init__(color)
-
-
-class LCH(_LCH):
-    """HWB color class."""
-
-    spaces = CS_MAP
-
-    def __init__(self, color=_LCH.DEF_BG):
-        """Initialize."""
-
-        super().__init__(color)
-
-
-SUPPORTED = (HSL, HWB, LAB, LCH, SRGB)
-for obj in SUPPORTED:
-    CS_MAP[obj.space()] = obj
+    CS_MAP = {obj.space(): obj for obj in SUPPORTED}

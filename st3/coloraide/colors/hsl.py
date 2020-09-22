@@ -1,23 +1,30 @@
 """HSL class."""
-from .base import _Color
-from .tools import _ColorTools
+from ._space import Space
+from ._tools import Tools, GamutBound, GamutAngle
+from . import _parse as parse
+from . import _convert as convert
 from .. import util
-from ..util import parse
-from ..util import convert
 
 
-class _HSL(_ColorTools, _Color):
+class HSL(Tools, Space):
     """HSL class."""
 
-    COLORSPACE = "hsl"
-    DEF_BG = "[0, 0, 0, 1]"
+    SPACE = "hsl"
+    DEF_BG = "color(hsl 0 0 0 / 1)"
+    CHANNEL_NAMES = frozenset(["hue", "saturation", "lightness", "alpha"])
 
-    def __init__(self, color=None):
+    _gamut = (
+        (GamutAngle(0.0), GamutAngle(360.0)),
+        (GamutBound(0.0), GamutBound(100.0)),
+        (GamutBound(0.0), GamutBound(100.0))
+    )
+
+    def __init__(self, color=DEF_BG):
         """Initialize."""
 
         super().__init__(color)
 
-        if isinstance(color, _Color):
+        if isinstance(color, Space):
             self._ch, self._cs, self._cl = convert.convert(color.coords(), color.space(), self.space())
             self._alpha = color._alpha
         elif isinstance(color, str):
@@ -35,63 +42,74 @@ class _HSL(_ColorTools, _Color):
         else:
             raise TypeError("Unexpected type '{}' received".format(type(color)))
 
+    def _is_achromatic(self, coords):
+        """Is achromatic."""
+
+        h, s, l = [util.round_half_up(c, scale=util.DEF_PREC) for c in coords]
+        return s < util.ACHROMATIC_THRESHOLD
+
+    def _on_convert(self):
+        """
+        Run after a convert operation.
+
+        Gives us an opportunity to normalize hues and things like that, if we desire.
+        """
+
+        if not (0.0 <= self._ch <= 360.0):
+            self._ch = self._ch % 360.0
+
     @property
     def _ch(self):
         """Hue channel."""
 
-        return self._c1
+        return self._coords[0]
 
     @_ch.setter
     def _ch(self, value):
         """Set hue channel."""
 
-        self._c1 = value if 0.0 <= value <= 1.0 else value % 1.0
+        self._coords[0] = value
 
     @property
     def _cs(self):
         """Saturation channel."""
 
-        return self._c2
+        return self._coords[1]
 
     @_cs.setter
     def _cs(self, value):
         """Set saturation channel."""
 
-        self._c2 = util.clamp(value, 0.0, 1.0)
+        self._coords[1] = value
 
     @property
     def _cl(self):
         """Lightness channel."""
 
-        return self._c3
+        return self._coords[2]
 
     @_cl.setter
     def _cl(self, value):
         """Set lightness channel."""
 
-        self._c3 = util.clamp(value, 0.0, 1.0)
-
-    def __str__(self):
-        """String."""
-
-        return self.to_string(alpha=True)
+        self._coords[2] = value
 
     def _grayscale(self):
         """Convert to grayscale."""
 
-        self._c1 = 0.0
+        self._ch = 0.0
         self._cs = 0.0
 
-    def _mix(self, coords1, coords2, factor, factor2=1.0):
+    def _mix(self, channels1, channels2, factor, factor2=1.0):
         """Blend the color with the given color."""
 
-        if self._is_achromatic(coords1):
-            coords1[0] = util.NAN
-        if self._is_achromatic(coords2):
-            coords2[0] = util.NAN
-        self._ch = self._hue_mix_channel(coords1[0], coords2[0], factor, factor2)
-        self._cl = self._mix_channel(coords1[1], coords2[1], factor, factor2)
-        self._cs = self._mix_channel(coords1[2], coords2[2], factor, factor2)
+        if self._is_achromatic(channels1):
+            channels1[0] = util.NAN
+        if self._is_achromatic(channels2):
+            channels2[0] = util.NAN
+        self._ch = self._hue_mix_channel(channels1[0], channels2[0], factor, factor2)
+        self._cs = self._mix_channel(channels1[1], channels2[1], factor, factor2)
+        self._cl = self._mix_channel(channels1[2], channels2[2], factor, factor2)
 
     @property
     def hue(self):
@@ -134,11 +152,11 @@ class _HSL(_ColorTools, _Color):
         """Translate channel string."""
 
         if channel == 0:
-            return parse.norm_deg_channel(value, 1.0)
+            return parse.norm_deg_channel(value)
         elif channel in (1, 2):
             return float(value)
         elif channel == -1:
-            return float(value)
+            return parse.norm_alpha_channel(value)
 
     @classmethod
     def split_channels(cls, color):
@@ -153,3 +171,8 @@ class _HSL(_ColorTools, _Color):
         if len(channels) == 3:
             channels.append(1.0)
         return channels
+
+    def to_string(self, *, options=None, alpha=None, precision=util.DEF_PREC, fit=util.DEF_FIT, **kwargs):
+        """To string."""
+
+        return self.to_generic_string(alpha=alpha, precision=precision, fit=fit)

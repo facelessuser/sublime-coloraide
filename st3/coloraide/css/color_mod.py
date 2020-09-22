@@ -1,12 +1,32 @@
 """Color-mod."""
 import re
-from .colors import SUPPORTED
-from .color_css import colorcss, colorcss_match, ColorMatch
-from ..util import parse
+from . import Color as ColorCSS
+from ..colors import ColorMatch
+from ..colors import _convert as convert
+from ..colors import _parse as parse
+from .. import util
+import functools
 import traceback
 
 WHITE = [1.0] * 3
 BLACK = [0.0] * 3
+
+TOKENS = {
+    "units": re.compile(
+        r"""(?xi)
+        # Some number of units separated by valid separators
+        (?:
+            {float} |
+            {angle} |
+            {percent} |
+            \#(?:{hex}{{6}}(?:{hex}{{2}})?|{hex}{{3}}(?:{hex})?) |
+            [\w][\w\d]*
+        )
+        """.format(**parse.COLOR_PARTS)
+    ),
+    "functions": re.compile(r'(?i)[\w][\w\d]*\('),
+    "separators": re.compile(r'(?:{comma}|{space}|{slash})'.format(**parse.COLOR_PARTS))
+}
 
 RE_ADJUSTERS = {
     "red": re.compile(
@@ -62,6 +82,88 @@ RE_BLEND_END = re.compile(r'(?i)\s+({percent})(?:\s+(rgb|hsl|hwb))?\s*\)'.format
 RE_HUE = re.compile(r'(?i){angle}'.format(**parse.COLOR_PARTS))
 RE_BRACKETS = re.compile(r'(?:(\()|(\))|[^()]+)')
 RE_MIN_CONTRAST_END = re.compile(r'(?i)\s+({float})\s*\)'.format(**parse.COLOR_PARTS))
+RE_VARS = re.compile(r'(?i)(?:(?<=^)|(?<=[\s\t\(,/]))(var\(\s*([-\w][-\w\d]*)\s*\))(?!\()(?=[\s\t\),/]|$)')
+
+
+def validate_vars(var, good_vars):
+    """
+    Validate variables.
+
+    We will blindly replace values, but if we are fairly confident they follow
+    the pattern of a valid, complete unit, if you replace them in a bad place,
+    it will break the color (as it should) and if not, it is likely to parse fine,
+    unless it breaks the syntax of the color being evaluated.
+    """
+
+    for k, v in var.items():
+        v = v.strip()
+        start = 0
+        need_sep = False
+        length = len(v)
+        while True:
+            if start == length:
+                good_vars[k] = v
+                break
+            try:
+                # Each item should be separated by some valid separator
+                if need_sep:
+                    m = TOKENS["separators"].match(v, start)
+                    if m:
+                        start = m.end(0)
+                        need_sep = False
+                        continue
+                    else:
+                        break
+
+                # Validate things like `rgb()`, `contrast()` etc.
+                m = TOKENS["functions"].match(v, start)
+                if m:
+                    end = None
+                    brackets = 1
+                    for m in RE_BRACKETS.finditer(v, start + 6):
+                        if m.group(2):
+                            brackets -= 1
+                        elif m.group(1):
+                            brackets += 1
+
+                        if brackets == 0:
+                            end = m.end(0)
+                            break
+                    if end is None:
+                        break
+                    start = end
+                    need_sep = True
+                    continue
+
+                # Validate that units such as percents, floats, hex colors, etc.
+                m = TOKENS["units"].match(v, start)
+                if m:
+                    start = m.end(0)
+                    need_sep = True
+                    continue
+                break
+            except Exception:
+                break
+
+
+def _var_replace(m, var=None, parents=None):
+    """Replace variables but try to prevent infinite recursion."""
+
+    name = m.group(2)
+    replacement = var.get(m.group(2))
+    string = replacement if replacement and name not in parents is not None else ""
+    parents.add(name)
+    return RE_VARS.sub(functools.partial(_var_replace, var=var, parents=parents), string)
+
+
+def handle_vars(string, variables, parents=None):
+    """Handle CSS variables."""
+
+    temp_vars = {}
+    validate_vars(variables, temp_vars)
+    parent_vars = set() if parents is None else parents
+
+    return RE_VARS.sub(functools.partial(_var_replace, var=temp_vars, parents=parent_vars), string)
 
 
 def contrast_ratio(lum1, lum2):
@@ -120,6 +222,7 @@ class ColorMod:
         color = None
         done = False
         old_parent = self._color
+        hue = None
 
         try:
             m = RE_COLOR_START.match(string, start)
@@ -128,7 +231,7 @@ class ColorMod:
                 m = RE_HUE.match(string, start)
                 if m:
                     hue = parse.norm_hue_channel(m.group(0))
-                    color = SUPPORTED["hsl"]([hue, 1, 0.5]).convert("srgb")
+                    color = Color("hsl", [hue, 1, 0.5]).convert("srgb")
                     start = m.end(0)
                 if color is None:
                     m = RE_COLOR_START.match(string, start)
@@ -137,22 +240,22 @@ class ColorMod:
                         if color2 is None:
                             raise ValueError("Found unterminated or invalid 'color('")
                         color = color2.convert("srgb")
+                        if not color.is_achromatic():
+                            hue = convert.srgb_to_hsv(*color._color.coords())[0]
                 if color is None:
-                    for obj in SUPPORTED:
-                        m = obj.MATCH.match(string, start)
-                        if m:
-                            try:
-                                color = colorcss(string[start:m.end(0)])
-                                if color.space() != "srgb":
-                                    color = color.convert("srgb")
-                                start = m.end(0)
-                                break
-                            except Exception:
-                                print(traceback.format_exc())
-                                pass
+                    obj = Color.match(string, start=start, fullmatch=False)
+                    if obj is not None:
+                        color = obj.color
+                        if color.space != "srgb":
+                            color = color.convert("srgb")
+                        if not color.is_achromatic():
+                            hue = convert.srgb_to_hsv(*color._color.coords())[0]
+                        start = obj.end
 
             if color is not None:
                 self._color = color
+                if not self._color.in_gamut():
+                    self._color.fit(method="clip")
 
                 while not done:
                     m = None
@@ -165,30 +268,33 @@ class ColorMod:
                         break
 
                     if name in ("red", "green", "blue"):
-                        start = self.process_rgb(name, m)
+                        start, hue = self.process_rgb(name, m, hue)
                     elif name in ("rgb", "rgbmult"):
-                        start = self.process_rgb_multi(m)
+                        start, hue = self.process_rgb_multi(m, hue)
                     elif name == "hex":
-                        start = self.process_hex(m)
+                        start, hue = self.process_hex(m, hue)
                     elif name == "alpha":
-                        start = self.process_alpha(m)
+                        start, hue = self.process_alpha(m, hue)
                     elif name == "hue":
-                        start = self.process_hue(m)
+                        start, hue = self.process_hue(m, hue)
                     elif name in ("saturation", "lightness", "whiteness", "blackness"):
-                        start = self.process_hwb_hsl_channels(name, m)
+                        start, hue = self.process_hwb_hsl_channels(name, m, hue)
                     elif name in ("tint", "shade"):
-                        start = self.process_tint_shade(name, m)
+                        start, hue = self.process_tint_shade(name, m, hue)
                     elif name == "contrast":
-                        start = self.process_contrast(m)
+                        start, hue = self.process_contrast(m, hue)
                     elif name == "min-contrast_start":
-                        start = self.process_min_contrast(m, string)
+                        start, hue = self.process_min_contrast(m, string, hue)
                     elif name == "blend_start":
-                        start = self.process_blend(m, string)
+                        start, hue = self.process_blend(m, string, hue)
                     elif name == "end":
                         done = True
                         start = m.end(0)
                     else:
                         break
+
+                    if not self._color.in_gamut():
+                        self._color.fit(method="clip")
             else:
                 raise ValueError('Could not calculate base color')
         except Exception:
@@ -211,10 +317,10 @@ class ColorMod:
         """Adjust base."""
 
         self._color = base
-        pattern = "color({} {})".format(self._color.to_string(alpha=True), string)
+        pattern = "color({} {})".format(self._color.to_string(fit="clip"), string)
         color, start = self._adjust(pattern)
         if color is not None:
-            self._color.mutate(color)
+            self._color.update(color)
         else:
             raise ValueError(
                 "'{}' doesn't appear to be a valid and/or supported CSS color or color-mod instruction".format(string)
@@ -226,7 +332,7 @@ class ColorMod:
         color, end = self._adjust(string, start=start)
         return color, end
 
-    def process_rgb(self, name, m):
+    def process_rgb(self, name, m, hue):
         """Process R, G, and B."""
 
         if m.group(2):
@@ -243,9 +349,11 @@ class ColorMod:
         elif m.group(3):
             op = m.group(3).strip()
         getattr(self, name)(value, op=op)
-        return m.end(0)
+        if not self._color.is_achromatic():
+            hue = convert.srgb_to_hsv(*self._color._color.coords())[0]
+        return m.end(0), hue
 
-    def process_rgb_multi(self, m):
+    def process_rgb_multi(self, m, hue):
         """Process RGB multi."""
 
         values = [
@@ -262,9 +370,11 @@ class ColorMod:
         self.red(values[0], op=op)
         self.green(values[1], op=op)
         self.blue(values[2], op=op)
-        return m.end(0)
+        if not self._color.is_achromatic():
+            hue = convert.srgb_to_hsv(*self._color._color.coords())[0]
+        return m.end(0), hue
 
-    def process_hex(self, m):
+    def process_hex(self, m, hue):
         """Process hex."""
 
         op = ""
@@ -277,9 +387,11 @@ class ColorMod:
         self.red(values[0], op=op)
         self.green(values[1], op=op)
         self.blue(values[2], op=op)
-        return m.end(0)
+        if not self._color.is_achromatic():
+            hue = convert.srgb_to_hsv(*self._color._color.coords())[0]
+        return m.end(0), hue
 
-    def process_alpha(self, m):
+    def process_alpha(self, m, hue):
         """Process alpha."""
 
         if m.group(2):
@@ -296,43 +408,51 @@ class ColorMod:
         elif m.group(3):
             op = m.group(3).strip()
         self.alpha(value, op=op)
-        return m.end(0)
+        return m.end(0), hue
 
-    def process_hue(self, m):
+    def process_hue(self, m, hue):
         """Process hue."""
 
         value = m.group(2)
-        value = parse.norm_angle(value) * parse.HUE_SCALE
+        value = parse.norm_angle(value)
         op = m.group(1).strip() if m.group(1) else ""
-        self.hue(value, op=op)
-        return m.end(0)
+        self.hue(value, hue, op=op)
+        if not self._color.is_achromatic():
+            hue = convert.srgb_to_hsv(*self._color._color.coords())[0]
+        return m.end(0), hue
 
-    def process_hwb_hsl_channels(self, name, m):
+    def process_hwb_hsl_channels(self, name, m, hue):
         """Process HWB and HSL channels (except hue)."""
 
         value = m.group(2)
-        value = float(value.strip('%')) * parse.SCALE_PERCENT
+        value = float(value.strip('%'))
         op = m.group(1).strip() if m.group(1) else ""
-        getattr(self, name)(value, op=op)
-        return m.end(0)
+        getattr(self, name)(value, op=op, hue=hue)
+        if not self._color.is_achromatic():
+            hue = convert.srgb_to_hsv(*self._color._color.coords())[0]
+        return m.end(0), hue
 
-    def process_tint_shade(self, name, m):
+    def process_tint_shade(self, name, m, hue):
         """Process tint/shade."""
 
         value = m.group(1)
-        value = float(value.strip('%')) * parse.SCALE_PERCENT
+        value = float(value.strip('%'))
         getattr(self, name)(value)
-        return m.end(0)
+        if not self._color.is_achromatic():
+            hue = convert.srgb_to_hsv(*self._color._color.coords())[0]
+        return m.end(0), hue
 
-    def process_contrast(self, m):
+    def process_contrast(self, m, hue):
         """Process contrast."""
 
         value = m.group(1)
-        value = float(value.strip('%')) * parse.SCALE_PERCENT
+        value = float(value.strip('%'))
         self.contrast(value)
-        return m.end(0)
+        if not self._color.is_achromatic():
+            hue = convert.srgb_to_hsv(*self._color._color.coords())[0]
+        return m.end(0), hue
 
-    def process_blend(self, m, string):
+    def process_blend(self, m, string, hue):
         """Process blend."""
 
         start = m.end(0)
@@ -344,12 +464,10 @@ class ColorMod:
                 raise ValueError("Found unterminated or invalid 'color('")
         else:
             color2 = None
-            for obj in SUPPORTED:
-                m = obj.MATCH.match(string, start)
-                if m:
-                    color2 = colorcss(string[start:m.end(0)])
-                    start = m.end(0)
-                    break
+            obj = Color.match(string, start=start, fullmatch=False)
+            if obj is not None:
+                color2 = obj.color
+                start = obj.end
             if color2 is None:
                 raise ValueError("Could not find a valid color for 'blend'")
         m = RE_BLEND_END.match(string, start)
@@ -365,7 +483,9 @@ class ColorMod:
             raise ValueError("Found unterminated or invalid 'blend('")
 
         self.blend(color2, 1.0 - value, alpha, space=space)
-        return start
+        if not self._color.is_achromatic():
+            hue = convert.srgb_to_hsv(*self._color._color.coords())[0]
+        return start, hue
 
     def tint(self, percent):
         """Tint color."""
@@ -387,13 +507,12 @@ class ColorMod:
         lum1 = self._color.luminance()
 
         max_hwb = self._color.convert("hwb")
-        max_hwb._ch = self._color._ch
         if lum1 < 0.5:
-            max_hwb.whiteness = 1.0
+            max_hwb.whiteness = 100.0
             max_hwb.blackness = 0.0
         else:
             max_hwb.whiteness = 0.0
-            max_hwb.blackness = 1.0
+            max_hwb.blackness = 100.0
 
         max_white = max_hwb.whiteness
         max_black = max_hwb.blackness
@@ -402,7 +521,6 @@ class ColorMod:
 
         if ratio > 4.5:
             min_hwb = self._color.convert("hwb")
-            min_hwb._ch = self._color._ch
             min_white = min_hwb.whiteness
             min_black = min_hwb.blackness
 
@@ -412,10 +530,10 @@ class ColorMod:
             while (abs(min_white - max_white) > 0.001 if lum1 < 0.5 else abs(min_black - max_black) > 0.001):
                 if lum1 < 0.5:
                     mid_white = (max_white + min_white) / 2
-                    mid_black = 1.0 - mid_white
+                    mid_black = 100.0 - mid_white
                 else:
                     mid_black = (max_black + min_black) / 2
-                    mid_white = 1.0 - mid_black
+                    mid_white = 100.0 - mid_black
 
                 min_hwb.whiteness = mid_white
                 min_hwb.blackness = mid_black
@@ -440,9 +558,9 @@ class ColorMod:
             min_hwb = max_hwb.clone()
 
         max_hwb.mix(min_hwb, 1.0 - percent, space="hwb")
-        self._color.mutate(max_hwb)
+        self._color.update(max_hwb)
 
-    def process_min_contrast(self, m, string):
+    def process_min_contrast(self, m, string, hue):
         """Process blend."""
 
         # Gather the min-contrast parameters
@@ -454,14 +572,10 @@ class ColorMod:
                 raise ValueError("Found unterminated or invalid 'color('")
         else:
             color2 = None
-            for obj in SUPPORTED:
-                m = obj.MATCH.match(string, start)
-                if m:
-                    color2 = colorcss(string[start:m.end(0)])
-                    start = m.end(0)
-                    break
-            if color2 is None:
-                raise ValueError("Could not find a valid color for 'min-contrast'")
+            obj = Color.match(string, start=start, fullmatch=False)
+            if obj is not None:
+                color2 = obj.color
+                start = obj.end
         m = RE_MIN_CONTRAST_END.match(string, start)
         if m:
             value = float(m.group(1))
@@ -469,8 +583,72 @@ class ColorMod:
         else:
             raise ValueError("Found unterminated or invalid 'min-contrast('")
 
-        self._color.min_contrast(color2, value)
-        return start
+        this = self._color.convert("srgb")
+        color2 = color2.convert("srgb")
+        color2.alpha = 1.0
+
+        self.min_contrast(this, color2, value)
+        self._color.update(this)
+        if not self._color.is_achromatic():
+            hue = convert.srgb_to_hsv(*self._color._color.coords())[0]
+        return start, hue
+
+    def min_contrast(self, color1, color2, target):
+        """
+        Get the color with the best contrast.
+
+        This mimics Sublime Text's custom `min-contrast` for `color-mod` (now defunct - the CSS version).
+        It ensure the color has at least the specified contrast ratio.
+
+        Algorithm is close but not exactly like Sublime. We are sometimes just a little off, but really close.
+        """
+
+        ratio = color1.contrast_ratio(color2)
+
+        # We already meet the minimum or the target is impossible
+        lum2 = color2.luminance()
+        if target < 1 or ratio >= target:
+            return self
+
+        required_lum = ((lum2 + 0.05) / target) - 0.05
+        if required_lum < 0:
+            required_lum = target * (lum2 + 0.05) - 0.05
+
+        # Too much precision isn't helpful
+        required_lum = round(required_lum, 3)
+
+        is_dark = lum2 < required_lum
+        mix = color1.new("srgb", WHITE if is_dark else BLACK)
+        if is_dark:
+            min_mix = 0.0
+            max_mix = 1.0
+            last_lum = 1.0
+        else:
+            max_mix = 0.0
+            min_mix = 1.0
+            last_lum = 0.0
+        last_mix = 1.0
+
+        orig = color1.clone().convert("srgb")
+        temp = orig.clone()
+
+        while abs(min_mix - max_mix) >= 0.002:
+            mid_mix = round((max_mix + min_mix) / 2, 3)
+
+            lum2 = temp.update(orig).mix(mix, mid_mix, space="srgb", alpha=True).luminance()
+
+            if lum2 > required_lum:
+                max_mix = mid_mix
+            else:
+                min_mix = mid_mix
+
+            if ((lum2 >= required_lum and lum2 < last_lum) if is_dark else (lum2 <= required_lum and lum2 > last_lum)):
+                last_lum = lum2
+                last_mix = mid_mix
+
+        # Use the best, last values
+        orig.mix(mix, last_mix, space="srgb", alpha=True)
+        color1.update(orig)
 
     def blend(self, color, percent, alpha=False, space="srgb"):
         """Blend color."""
@@ -478,53 +656,49 @@ class ColorMod:
         space = space.lower()
         if space not in ("srgb", "hsl", "hwb"):
             raise ValueError(
-                "ColorMod's does not support the '{}' colorspace, only 'srgb', 'hsl', and 'hwb' are SUPPORTED"
+                "ColorMod's does not support the '{}' colorspace, only 'srgb', 'hsl', and 'hwb' are supported"
             ).format(space)
         this = self._color.convert(space) if self._color.space() != space else self._color
-        this._ch = self._color._ch
 
         if color.space() != space:
-            hue = color._ch
+            hue = color.hue
             color = color.convert(space)
-            color._ch = hue
+            color.hue = hue
 
         this.mix(color, percent, alpha=False, space=space)
-        self._color.mutate(this)
+        self._color.update(this)
 
     def red(self, value, op=""):
         """Red."""
 
         this = self._color.convert("SRGB") if self._color.space() != "srgb" else self._color
-        this._ch = self._color._ch
         op = self.OP_MAP.get(op, self._op_null)
-        this._cr = op(this._cr, value)
-        self._color.mutate(this)
+        this.red = op(this.red, value)
+        self._color.update(this)
 
     def green(self, value, op=""):
         """Green."""
 
         this = self._color.convert("SRGB") if self._color.space() != "srgb" else self._color
-        this._ch = self._color._ch
         op = self.OP_MAP.get(op, self._op_null)
-        this._cg = op(this._cg, value)
-        self._color.mutate(this)
+        this.green = op(this.green, value)
+        self._color.update(this)
 
     def blue(self, value, op=""):
         """Blue."""
 
         this = self._color.convert("SRGB") if self._color.space() != "srgb" else self._color
-        this._ch = self._color._ch
         op = self.OP_MAP.get(op, self._op_null)
-        this._cb = op(this._cb, value)
-        self._color.mutate(this)
+        this.blue = op(this.blue, value)
+        self._color.update(this)
 
     def alpha(self, value, op=""):
         """Alpha."""
 
         this = self._color
         op = self.OP_MAP.get(op, self._op_null)
-        this._alpha = op(this._alpha, value)
-        self._color.mutate(this)
+        this.alpha = op(this.alpha, value)
+        self._color.update(this)
 
     def hue(self, value, op=""):
         """Hue."""
@@ -533,90 +707,159 @@ class ColorMod:
             return
         this = self._color.convert("hsl") if self._color.space() != "hsl" else self._color
         op = self.OP_MAP.get(op, self._op_null)
-        this._ch = op(this._ch, value)
-        self._color.mutate(this)
+        this.hue = op(this.hue, value)
+        self._color.update(this)
 
-    def lightness(self, value, op=""):
+    def lightness(self, value, op="", hue=None):
         """Lightness."""
 
         this = self._color.convert("hsl") if self._color.space() != "hsl" else self._color
-        this._ch = self._color._ch
+        if this.is_achromatic() and hue is not None:
+            this.hue = hue
         op = self.OP_MAP.get(op, self._op_null)
-        this._cl = op(this._cl, value)
-        self._color.mutate(this)
+        this.lightness = op(this.lightness, value)
+        self._color.update(this)
 
-    def saturation(self, value, op=""):
+    def saturation(self, value, op="", hue=None):
         """Saturation."""
 
         this = self._color.convert("hsl") if self._color.space() != "hsl" else self._color
-        this._ch = self._color._ch
+        if this.is_achromatic() and hue is not None:
+            this.hue = hue
         op = self.OP_MAP.get(op, self._op_null)
-        this._cs = op(this._cs, value)
-        self._color.mutate(this)
+        this.saturation = op(this.saturation, value)
+        self._color.update(this)
 
-    def whiteness(self, value, op=""):
+    def whiteness(self, value, op="", hue=None):
         """White."""
 
-        this = self._color.convert('hsb') if self._color.space() != "hwb" else self._color
-        this._ch = self._color._ch
+        this = self._color.convert('hwb') if self._color.space() != "hwb" else self._color
+        if this.is_achromatic() and hue is not None:
+            this.hue = hue
         achromatic = this.is_achromatic()
         op = self.OP_MAP.get(op, self._op_null)
-        this._cw = op(this._cw, value)
+        this.whiteness = op(this.whiteness, value)
         if achromatic:
-            self._c3 = 1.0 - self._c2
-        self._color.mutate(this)
+            self.blackness = 100.0 - self.whiteness
+        self._color.update(this)
 
-    def blackness(self, value, op=""):
+    def blackness(self, value, op="", hue=None):
         """Black."""
 
         this = self._color.convert('hsb') if self._color.space() != "hwb" else self._color
-        this._ch = self._color._ch
+        if this.is_achromatic() and hue is not None:
+            this.hue = hue
         achromatic = this.is_achromatic()
         op = self.OP_MAP.get(op, self._op_null)
-        this._cb = op(this._cb, value)
+        this.blackness = op(this.blackness, value)
         if achromatic:
-            self._c2 = 1.0 - self._c3
-        self._color.mutate(this)
+            self.whiteness = 100.0 - self.blackness
+        self._color.update(this)
 
 
-def colormod(string, variables=None):
-    """Parse a CSS color."""
+class Color(ColorCSS):
+    """Color modify class."""
 
-    match = colormod_match(string, variables, fullmatch=True)
-    if match is not None:
-        return match.color
+    def __init__(self, color, data=None, alpha=util.DEF_ALPHA, filters=None, variables=None):
+        """Initialize."""
 
+        self._attach(self._parse(color, data, alpha, filters, variables))
 
-def colormod_match(string, variables=None, start=0, fullmatch=False):
-    """Match a color at the given position."""
+    @classmethod
+    def _parse(cls, color, data=None, alpha=util.DEF_ALPHA, filters=None, variables=None):
+        """Parse the color."""
 
-    # Handle variable
-    end = None
-    is_mod = False
-    if variables:
-        m = parse.RE_VARS.match(string, start)
-        if m and (not fullmatch or len(string) == m.end(0)):
-            end = m.end(0)
-            start = 0
-            string = string[start:end]
-            string = parse.handle_vars(string, variables)
-            variables = None
-
-    temp = parse.bracket_match(RE_COLOR_START, string, start, fullmatch)
-    if end is None and temp:
-        end = temp
-        is_mod = True
-    elif end is not None and temp is not None:
-        is_mod = True
-
-    if is_mod:
-        if variables:
-            string = parse.handle_vars(string, variables)
-        obj, match_end = ColorMod(fullmatch).adjust(string, start)
-        if obj is not None:
-            return ColorMatch(obj, start, end if end is not None else match_end)
-    else:
-        obj = colorcss_match(string, start=start, fullmatch=fullmatch, variables=variables)
-        if obj is not None and end:
-            obj.end = end
+        obj = None
+        if data is not None:
+            filters = set(filters) if filters is not None else set()
+            for space, space_class in cls.CS_MAP.items():
+                s = color.lower()
+                if space == s and (not filters or s in filters):
+                    obj = space_class(data[:space_class.NUM_COLOR_CHANNELS] + [alpha])
+                    return obj
+        elif isinstance(color, Color):
+            if not filters or color.space() in filters:
+                obj = cls.CS_MAP[color.space()](color._color)
+        else:
+            m = cls._match(color, fullmatch=True, filters=filters, variables=variables)
+            if m is None:
+                raise ValueError("'{}' is not a valid color".format(color))
+            obj = m.color
+        if obj is None:
+            raise ValueError("Could not process the provided color")
         return obj
+
+    @classmethod
+    def _match(cls, string, start=0, fullmatch=False, filters=None, variables=None):
+        """
+        Match a color in a buffer and return a color object.
+
+        This must return the color space, not the Color object.
+        """
+
+        # Handle variable
+        end = None
+        is_mod = False
+        if variables:
+            m = RE_VARS.match(string, start)
+            if m and (not fullmatch or len(string) == m.end(0)):
+                end = m.end(0)
+                start = 0
+                string = string[start:end]
+                string = handle_vars(string, variables)
+                variables = None
+
+        temp = parse.bracket_match(RE_COLOR_START, string, start, fullmatch)
+        if end is None and temp:
+            end = temp
+            is_mod = True
+        elif end is not None and temp is not None:
+            is_mod = True
+
+        if is_mod:
+            if variables:
+                string = handle_vars(string, variables)
+            obj, match_end = ColorMod(fullmatch).adjust(string, start)
+            if obj is not None:
+                return ColorMatch(obj._color, start, end if end is not None else match_end)
+        else:
+            filters = set(filters) if filters is not None else set()
+            obj = None
+            for space, space_class in cls.CS_MAP.items():
+                if filters and space not in filters:
+                    continue
+                value, match_end = space_class.match(string, start, fullmatch)
+                if value is not None:
+                    color = space_class(value)
+                    obj = ColorMatch(color, start, match_end)
+            if obj is not None and end:
+                obj.end = end
+            return obj
+
+    @classmethod
+    def match(cls, string, start=0, fullmatch=False, filters=None, variables=None):
+        """Match color."""
+
+        obj = cls._match(string, start, fullmatch, filters, variables)
+        if obj is not None:
+            obj.color = cls(obj.color.space(), obj.color.coords(), obj.color.alpha)
+        return obj
+
+    @classmethod
+    def new(cls, color, data=None, alpha=util.DEF_ALPHA, filters=None, variables=None):
+        """Create new color object."""
+
+        return cls(color, data, alpha, filters, variables)
+
+    def update(self, color, data=None, alpha=util.DEF_ALPHA, filters=None, variables=None):
+        """Update the existing color space with the provided color."""
+
+        obj = self._parse(color, data, alpha, filters, variables)
+        self._color.update(obj)
+        return self
+
+    def mutate(self, color, data=None, alpha=util.DEF_ALPHA, filters=None, variables=None):
+        """Mutate the current color to a new color."""
+
+        self._attach(self._parse(color, data, alpha, filters, variables))
+        return self

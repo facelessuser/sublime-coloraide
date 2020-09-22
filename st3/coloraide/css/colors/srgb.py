@@ -2,13 +2,13 @@
 from . import css_names
 import re
 from ...colors import srgb as generic
+from ...colors import _parse as parse
 from ... import util
-from ...util import parse
 
 RE_COMPRESS = re.compile(r'(?i)^#({hex})\1({hex})\2({hex})\3(?:({hex})\4)?$'.format(**parse.COLOR_PARTS))
 
 
-class _SRGB(generic._SRGB):
+class SRGB(generic.SRGB):
     """SRGB class."""
 
     DEF_BG = "rgb(0 0 0 / 1)"
@@ -45,29 +45,31 @@ class _SRGB(generic._SRGB):
 
     HEX_MATCH = re.compile(r"(?i)#(?:({hex}{{6}})({hex}{{2}})?|({hex}{{3}})({hex})?)\b".format(**parse.COLOR_PARTS))
 
-    def __init__(self, color=None):
+    def __init__(self, color=DEF_BG):
         """Initialize."""
 
         super().__init__(color)
 
     def to_string(
-        self, *, alpha=None, name=False, hex_code=False, hex_upper=False, compress=False, comma=False, percent=False,
-        precision=util.DEF_PREC, raw=False
+        self, *, options=None, alpha=None, precision=util.DEF_PREC, fit=util.DEF_FIT, **kwargs
     ):
         """Convert to CSS."""
 
-        if raw:
-            return super().to_string(alpha=alpha, precision=precision)
+        if options is None:
+            options = {}
+
+        if options.get("color"):
+            return self.to_generic_string(alpha=alpha, precision=precision, fit=fit, **kwargs)
 
         value = ''
-        if hex_code or name:
+        if options.get("hex") or options.get("names"):
             if alpha is not False and (alpha is True or self._alpha < 1.0):
-                h = self._get_hexa(compress=compress, hex_upper=hex_upper)
+                h = self._get_hexa(options, precision=precision, fit=fit)
             else:
-                h = self._get_hex(compress=compress, hex_upper=hex_upper)
-            if hex_code:
+                h = self._get_hex(options, precision=precision, fit=fit)
+            if options.get("hex"):
                 value = h
-            if name:
+            if options.get("names"):
                 length = len(h) - 1
                 index = int(length / 4)
                 if length in (8, 4) and h[-index:].lower() == ("f" * index):
@@ -75,15 +77,19 @@ class _SRGB(generic._SRGB):
                 n = css_names.hex2name(h)
                 if n is not None:
                     value = n
+
         if not value:
             if alpha is not False and (alpha is True or self._alpha < 1.0):
-                value = self._get_rgba(comma=comma, percent=percent, precision=precision)
+                value = self._get_rgba(options, precision=precision, fit=fit)
             else:
-                value = self._get_rgb(comma=comma, percent=percent, precision=precision)
+                value = self._get_rgb(options, precision=precision, fit=fit)
         return value
 
-    def _get_rgb(self, *, comma=False, percent=False, precision=util.DEF_PREC):
+    def _get_rgb(self, options, *, precision=util.DEF_PREC, fit=util.DEF_FIT):
         """Get RGB color."""
+
+        percent = options.get("percent", False)
+        comma = options.get("comma", False)
 
         factor = 100.0 if percent else 255.0
 
@@ -92,14 +98,18 @@ class _SRGB(generic._SRGB):
         else:
             template = "rgb({}, {}, {})" if comma else "rgb({} {} {})"
 
+        coords = self.fit_coords(method=fit) if fit else self.coords()
         return template.format(
-            util.fmt_float(self._cr * factor, precision),
-            util.fmt_float(self._cg * factor, precision),
-            util.fmt_float(self._cb * factor, precision)
+            util.fmt_float(coords[0] * factor, precision),
+            util.fmt_float(coords[1] * factor, precision),
+            util.fmt_float(coords[2] * factor, precision)
         )
 
-    def _get_rgba(self, *, comma=False, percent=False, precision=util.DEF_PREC):
+    def _get_rgba(self, options, *, precision=util.DEF_PREC, fit=util.DEF_FIT):
         """Get RGB color with alpha channel."""
+
+        percent = options.get("percent", False)
+        comma = options.get("comma", False)
 
         factor = 100.0 if percent else 255.0
 
@@ -108,24 +118,32 @@ class _SRGB(generic._SRGB):
         else:
             template = "rgba({}, {}, {}, {})" if comma else "rgb({} {} {} / {})"
 
+        coords = self.fit_coords(method=fit) if fit else self.coords()
         return template.format(
-            util.fmt_float(self._cr * factor, precision),
-            util.fmt_float(self._cg * factor, precision),
-            util.fmt_float(self._cb * factor, precision),
+            util.fmt_float(coords[0] * factor, precision),
+            util.fmt_float(coords[1] * factor, precision),
+            util.fmt_float(coords[2] * factor, precision),
             util.fmt_float(self._alpha, max(util.DEF_PREC, precision))
         )
 
-    def _get_hexa(self, *, compress=False, hex_upper=False):
+    def _get_hexa(self, options, *, precision=util.DEF_PREC, fit="clip"):
         """Get the RGB color with the alpha channel."""
+
+        hex_upper = options.get("hex_upper", False)
+        compress = options.get("compress", False)
+
+        if not fit:
+            fit == "clip"
 
         template = "#{:02x}{:02x}{:02x}{:02x}"
         if hex_upper:
             template = template.upper()
 
+        coords = self.fit_coords(method=fit) if fit else self.coords()
         value = template.format(
-            int(util.round_half_up(self._cr * 255.0)),
-            int(util.round_half_up(self._cg * 255.0)),
-            int(util.round_half_up(self._cb * 255.0)),
+            int(util.round_half_up(coords[0] * 255.0)),
+            int(util.round_half_up(coords[1] * 255.0)),
+            int(util.round_half_up(coords[2] * 255.0)),
             int(util.round_half_up(self._alpha * 255.0))
         )
 
@@ -135,17 +153,24 @@ class _SRGB(generic._SRGB):
                 value = m.expand(r"#\1\2\3\4")
         return value
 
-    def _get_hex(self, *, compress=False, hex_upper=False):
+    def _get_hex(self, options, *, precision=util.DEF_PREC, fit="clip"):
         """Get the `RGB` value."""
+
+        hex_upper = options.get("hex_upper", False)
+        compress = options.get("compress", False)
+
+        if not fit:
+            fit == "clip"
 
         template = "#{:02x}{:02x}{:02x}"
         if hex_upper:
             template = template.upper()
 
+        coords = self.fit_coords(method=fit) if fit else self.coords()
         value = template.format(
-            int(util.round_half_up(self._cr * 255.0)),
-            int(util.round_half_up(self._cg * 255.0)),
-            int(util.round_half_up(self._cb * 255.0))
+            int(util.round_half_up(coords[0] * 255.0)),
+            int(util.round_half_up(coords[1] * 255.0)),
+            int(util.round_half_up(coords[2] * 255.0))
         )
 
         if compress:
@@ -203,24 +228,18 @@ class _SRGB(generic._SRGB):
                 )
 
     @classmethod
-    def match(cls, string, start=0, fullmatch=True, variables=None):
+    def match(cls, string, start=0, fullmatch=True):
         """Match a CSS color string."""
 
-        # We will only match variables within `func()` if variables are at the root level,
-        # they should be handled by `colorcss`, not the color class.
-        end = None
-        if variables and cls.START:
-            end = parse.bracket_match(cls.START, string, start, fullmatch)
-            if end is not None:
-                string = parse.handle_vars(string, variables)
-                start = 0
-
+        channels, end = super().match(string, start, fullmatch)
+        if channels is not None:
+            return channels, end
         m = cls.MATCH.match(string, start)
         if m is not None and (not fullmatch or m.end(0) == len(string)):
             if not string[start:start + 5].lower().startswith(('#', 'rgb(', 'rgba(')):
                 string = css_names.name2hex(string[m.start(0):m.end(0)])
                 if string is not None:
-                    return cls.split_channels(string), end if end is not None else m.end(0)
+                    return cls.split_channels(string), m.end(0)
             else:
-                return cls.split_channels(string[m.start(0):m.end(0)]), end if end is not None else m.end(0)
+                return cls.split_channels(string[m.start(0):m.end(0)]), m.end(0)
         return None, None

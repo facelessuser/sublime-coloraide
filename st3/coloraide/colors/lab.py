@@ -1,23 +1,30 @@
 """LAB class."""
-from .base import _Color
-from .tools import _ColorTools
+from ._space import Space
+from ._tools import Tools, GamutUnbound, GamutBound
+from . import _convert as convert
+from . import _parse as parse
 from .. import util
-from ..util import parse
-from ..util import convert
 
 
-class _LAB(_ColorTools, _Color):
+class LAB(Tools, Space):
     """LAB class."""
 
-    COLORSPACE = "lab"
-    DEF_BG = "[0, 0, 0, 1]"
+    SPACE = "lab"
+    DEF_BG = "color(lab 0 0 0 / 1)"
+    CHANNEL_NAMES = frozenset(["l", "a", "b", "alpha"])
 
-    def __init__(self, color=None):
+    _gamut = (
+        (GamutBound(0), GamutUnbound(100.0)),  # Technically we could/should clamp the zero side.
+        (GamutUnbound(-160), GamutUnbound(160)),  # No limit, but we could impose one +/-160?
+        (GamutUnbound(-160), GamutUnbound(160))  # No limit, but we could impose one +/-160?
+    )
+
+    def __init__(self, color=DEF_BG):
         """Initialize."""
 
         super().__init__(color)
 
-        if isinstance(color, _Color):
+        if isinstance(color, Space):
             self._cl, self._ca, self._cb = convert.convert(color.coords(), color.space(), self.space())
             self._alpha = color._alpha
         elif isinstance(color, str):
@@ -35,11 +42,17 @@ class _LAB(_ColorTools, _Color):
         else:
             raise TypeError("Unexpected type '{}' received".format(type(color)))
 
+    def _is_achromatic(self, coords):
+        """Is achromatic."""
+
+        l, a, b = [util.round_half_up(c, scale=util.DEF_PREC) for c in coords]
+        return abs(a) < util.ACHROMATIC_THRESHOLD and abs(b) < util.ACHROMATIC_THRESHOLD
+
     @property
     def _cl(self):
         """Hue channel."""
 
-        return self._c1
+        return self._coords[0]
 
     @_cl.setter
     def _cl(self, value):
@@ -51,13 +64,13 @@ class _LAB(_ColorTools, _Color):
         TODO: Do we clamp the higher end or not?
         """
 
-        self._c1 = util.clamp(value, 0.0, None)
+        self._coords[0] = value
 
     @property
     def _ca(self):
         """A on LAB axis."""
 
-        return self._c2
+        return self._coords[1]
 
     @_ca.setter
     def _ca(self, value):
@@ -70,13 +83,13 @@ class _LAB(_ColorTools, _Color):
         TODO: Should we not clamp this?
         """
 
-        self._c2 = util.clamp(value, None, None)
+        self._coords[1] = value
 
     @property
     def _cb(self):
         """B on LAB axis."""
 
-        return self._c3
+        return self._coords[2]
 
     @_cb.setter
     def _cb(self, value):
@@ -88,12 +101,7 @@ class _LAB(_ColorTools, _Color):
         TODO: Should we not clamp this?
         """
 
-        self._c3 = util.clamp(value, None, None)
-
-    def __str__(self):
-        """String."""
-
-        return self.to_string(alpha=True)
+        self._coords[2] = value
 
     def _grayscale(self):
         """Convert to grayscale."""
@@ -101,12 +109,12 @@ class _LAB(_ColorTools, _Color):
         self._ca = 0
         self._cb = 0
 
-    def _mix(self, coords1, coords2, factor, factor2=1.0):
+    def _mix(self, channels1, channels2, factor, factor2=1.0):
         """Blend the color with the given color."""
 
-        self._cl = self._mix_channel(coords1[0], coords2[0], factor, factor2)
-        self._ca = self._mix_channel(coords1[1], coords2[1], factor, factor2)
-        self._cb = self._mix_channel(coords1[2], coords2[2], factor, factor2)
+        self._cl = self._mix_channel(channels1[0], channels2[0], factor, factor2)
+        self._ca = self._mix_channel(channels1[1], channels2[1], factor, factor2)
+        self._cb = self._mix_channel(channels1[2], channels2[2], factor, factor2)
 
     @property
     def l(self):
@@ -148,18 +156,9 @@ class _LAB(_ColorTools, _Color):
     def tx_channel(cls, channel, value):
         """Translate channel string."""
 
-        return float(value)
+        return float(value) if channel > 0 else parse.norm_alpha_channel(value)
 
-    @classmethod
-    def split_channels(cls, color):
-        """Split channels."""
+    def to_string(self, *, options=None, alpha=None, precision=util.DEF_PREC, fit=util.DEF_FIT, **kwargs):
+        """To string."""
 
-        channels = []
-        for i, c in enumerate(parse.RE_COMMA_SPLIT.split(color[1:-1].strip()), 0):
-            if i <= 2:
-                channels.append(cls.tx_channel(i, c))
-            else:
-                channels.append(cls.tx_channel(-1, c))
-        if len(channels) == 3:
-            channels.append(1.0)
-        return channels
+        return self.to_generic_string(alpha=alpha, precision=precision, fit=fit)
