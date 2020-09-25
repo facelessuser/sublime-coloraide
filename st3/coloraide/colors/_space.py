@@ -1,20 +1,17 @@
 """Color base."""
 from .. import util
 from . import _parse as parse
-import re
 
 # Technically this form can handle any number of channels as long as any
-# extra are thrown away. We only support 6 currently. Even if we supported
-# more, we'd still have to cap for performance.
-MATCH = re.compile(
-    r"""(?xi)
-    color\(\s*
-    (?:([-a-z0-9]+)\s+)?
-    ({float}(?:{space}{float}){{,5}}(?:{slash}(?:{percent}|{float}))?)
-    \s*\)
-    """.format(
-        **parse.COLOR_PARTS
-    )
+# extra are thrown away. We only support 6 currently. If we ever support
+# colors with more channels, we can bump this.
+RE_GENERIC_MATCH = r"""(?xi)
+color\(\s*
+(?:({{color_space}})\s+)?
+({float}(?:{space}{float}){{{{,6}}}}(?:{slash}(?:{percent}|{float}))?)
+\s*\)
+""".format(
+    **parse.COLOR_PARTS
 )
 
 
@@ -48,6 +45,8 @@ class Space:
     NUM_COLOR_CHANNELS = 3
     IS_DEFAULT = False
     CHANNEL_NAMES = frozenset(["alpha"])
+    GENERIC_MATCH = ""
+    MATCH = ""
 
     def __init__(self, color=None):
         """Initialize."""
@@ -137,7 +136,7 @@ class Space:
     def alpha(self, value):
         """Adjust alpha."""
 
-        self._alpha = self.tx_channel(-1, value) if isinstance(value, str) else float(value)
+        self._alpha = self._tx_channel(-1, value) if isinstance(value, str) else float(value)
 
     def set(self, name, value):  # noqa: A003
         """Set the given channel."""
@@ -167,16 +166,16 @@ class Space:
     __str__ = __repr__
 
     @classmethod
-    def tx_channel(cls, channel, value):
+    def _tx_channel(cls, channel, value):
         """Set a non-alpha color channel."""
 
-        raise NotImplementedError("Base _Color class does not implement 'tx_channel' directly.")
+        raise NotImplementedError("Base _Color class does not implement '_tx_channel' directly.")
 
     @classmethod
-    def match(cls, string, start=0, fullmatch=True):
-        """Match a color by string."""
+    def generic_match(cls, string, start=0, fullmatch=True):
+        """Match a color by string using the default, generic format."""
 
-        m = MATCH.match(string, start)
+        m = cls.GENERIC_MATCH.match(string, start)
         if (
             m is not None and
             (
@@ -186,3 +185,9 @@ class Space:
         ):
             return split_channels(cls, m.group(2)), m.end(0)
         return None, None
+
+    @classmethod
+    def match(cls, string, start=0, fullmatch=True):
+        """Match a color by string."""
+
+        return cls.generic_match(string, start, fullmatch)

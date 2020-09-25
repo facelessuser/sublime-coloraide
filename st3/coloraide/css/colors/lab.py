@@ -40,13 +40,11 @@ class LAB(generic.LAB):
         super().__init__(color)
 
     def to_string(
-        self, *, options=None, alpha=None, precision=util.DEF_PREC, fit=util.DEF_FIT, **kwargs
+        self, *, alpha=None, precision=util.DEF_PREC, fit=util.DEF_FIT, **kwargs
     ):
         """Convert to CSS."""
 
-        if options is None:
-            options = {}
-
+        options = kwargs
         if options.get("color"):
             return self.to_generic_string(alpha=alpha, precision=precision, fit=fit, **kwargs)
 
@@ -110,7 +108,7 @@ class LAB(generic.LAB):
         )
 
     @classmethod
-    def tx_channel(cls, channel, value):
+    def _tx_channel(cls, channel, value):
         """Translate channel string."""
 
         if channel == 0:
@@ -130,9 +128,9 @@ class LAB(generic.LAB):
             alpha = None
             for i, c in enumerate(parse.RE_CHAN_SPLIT.split(color[start:-1].strip()), 0):
                 if i == 0:
-                    channels.append(cls.tx_channel(i, c))
+                    channels.append(cls._tx_channel(i, c))
                 else:
-                    alpha = cls.tx_channel(-1, c)
+                    alpha = cls._tx_channel(-1, c)
             channels.extend([0.0, 0.0])
             channels.append(1.0 if alpha is None else alpha)
         else:
@@ -140,9 +138,9 @@ class LAB(generic.LAB):
             channels = []
             for i, c in enumerate(parse.RE_CHAN_SPLIT.split(color[start:-1].strip()), 0):
                 if i <= 2:
-                    channels.append(cls.tx_channel(i, c))
+                    channels.append(cls._tx_channel(i, c))
                 else:
-                    channels.append(cls.tx_channel(-1, c))
+                    channels.append(cls._tx_channel(-1, c))
             if len(channels) == 3:
                 channels.append(1.0)
         return channels

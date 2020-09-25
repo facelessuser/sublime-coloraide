@@ -1,9 +1,10 @@
 """LCH class."""
-from ._space import Space
-from ._tools import Tools, GamutUnbound, GamutAngle, GamutBound
+from ._space import Space, RE_GENERIC_MATCH
+from ._tools import Tools, GamutUnbound, GamutAngle
 from . import _convert as convert
 from . import _parse as parse
 from .. import util
+import re
 
 
 class LCH(Tools, Space):
@@ -12,10 +13,15 @@ class LCH(Tools, Space):
     SPACE = "lch"
     DEF_BG = "color(lch 0 0 0 / 1)"
     CHANNEL_NAMES = frozenset(["lightness", "chroma", "hue", "alpha"])
+    GENERIC_MATCH = re.compile(RE_GENERIC_MATCH.format(color_space=SPACE))
 
     _gamut = (
-        (GamutBound(0.0), GamutUnbound(100.0)),  # Technically we could/should clamp the zero side.
-        (GamutBound(0.0), GamutUnbound(100.0)),  # Again, I think chroma should be clamped on the zero side.
+        # I think chroma, specifically should be clamped. Generally many
+        # some don't to prevent rounding issues. We should only get
+        # negative chroma via direct user input, but when translating to
+        # Lab, this will be corrected.
+        (GamutUnbound(0.0), GamutUnbound(100.0)),
+        (GamutUnbound(0.0), GamutUnbound(100.0)),
         (GamutAngle(0.0), GamutAngle(360.0)),
     )
 
@@ -107,7 +113,7 @@ class LCH(Tools, Space):
 
         self._coords[2] = value
 
-    def _mix(self, channels1, channels2, factor, factor2=1.0):
+    def _mix(self, channels1, channels2, factor, factor2=1.0, hue=util.DEF_HUE_ADJ, **kwargs):
         """Blend the color with the given color."""
 
         hue1 = util.NAN if self._is_achromatic(channels1) else channels1[2]
@@ -115,7 +121,7 @@ class LCH(Tools, Space):
         return (
             self._mix_channel(channels1[0], channels2[0], factor, factor2),
             self._mix_channel(channels1[1], channels2[1], factor, factor2),
-            self._hue_mix_channel(hue1, hue2, factor, factor2)
+            self._hue_mix_channel(hue1, hue2, factor, factor2, hue=hue)
         )
 
     @property
@@ -128,7 +134,7 @@ class LCH(Tools, Space):
     def lightness(self, value):
         """Get true luminance."""
 
-        self._cl = self.tx_channel(0, value) if isinstance(value, str) else float(value)
+        self._cl = self._tx_channel(0, value) if isinstance(value, str) else float(value)
 
     @property
     def chroma(self):
@@ -140,7 +146,7 @@ class LCH(Tools, Space):
     def chroma(self, value):
         """chroma."""
 
-        self._cc = self.tx_channel(1, value) if isinstance(value, str) else float(value)
+        self._cc = self._tx_channel(1, value) if isinstance(value, str) else float(value)
 
     @property
     def hue(self):
@@ -152,10 +158,10 @@ class LCH(Tools, Space):
     def hue(self, value):
         """Shift the hue."""
 
-        self._ch = self.tx_channel(2, value) if isinstance(value, str) else float(value)
+        self._ch = self._tx_channel(2, value) if isinstance(value, str) else float(value)
 
     @classmethod
-    def tx_channel(cls, channel, value):
+    def _tx_channel(cls, channel, value):
         """Translate channel string."""
 
         if channel in (1, 0):
@@ -165,7 +171,7 @@ class LCH(Tools, Space):
         elif channel == -1:
             return parse.norm_alpha_channel(value)
 
-    def to_string(self, *, options=None, alpha=None, precision=util.DEF_PREC, fit=util.DEF_FIT, **kwargs):
+    def to_string(self, *, alpha=None, precision=util.DEF_PREC, fit=util.DEF_FIT, **kwargs):
         """To string."""
 
         return self.to_generic_string(alpha=alpha, precision=precision, fit=fit)

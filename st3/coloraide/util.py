@@ -13,6 +13,7 @@ DEF_FIT = "lch-chroma"
 DEF_FIT_TOLERANCE = 0.000075
 DEF_ALPHA = 1.0
 DEF_MIX = 0.5
+DEF_HUE_ADJ = "shorter"
 
 
 def dot(a, b):
@@ -112,6 +113,14 @@ def divide(a, b):
         value = [[x / y for x, y in zip(ra, rb)] for ra, rb in zip(a, b)]
 
     return value
+
+
+def cbrt(x):
+    """Cube root."""
+
+    if 0 <= x:
+        return x ** (1.0 / 3.0)
+    return -(-x) ** (1.0 / 3.0)
 
 
 def clamp(value, mn=None, mx=None):
