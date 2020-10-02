@@ -4,4 +4,4 @@ ColorAide dependency for Sublime Text.
 
 Original source: https://github.com/facelessuser/coloraide.
 
-In beta.
+Current version:  0.1.0.
