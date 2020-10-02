@@ -35,10 +35,10 @@ class HWB(generic.HWB):
 
         options = kwargs
         if options.get("color"):
-            return self.to_generic_string(alpha=alpha, precision=precision, fit=fit, **kwargs)
+            return super().to_string(alpha=alpha, precision=precision, fit=fit, **kwargs)
 
         value = ''
-        if alpha is not False and (alpha is True or self._alpha < 1.0):
+        if alpha is not False and (alpha is True or self.alpha < 1.0):
             value = self._get_hwba(options, precision=precision, fit=fit)
         else:
             value = self._get_hwb(options, precision=precision, fit=fit)
@@ -66,11 +66,11 @@ class HWB(generic.HWB):
             util.fmt_float(coords[0], precision),
             util.fmt_float(coords[1], precision),
             util.fmt_float(coords[2], precision),
-            util.fmt_float(self._alpha, max(util.DEF_PREC, precision))
+            util.fmt_float(self.alpha, max(util.DEF_PREC, precision))
         )
 
     @classmethod
-    def _tx_channel(cls, channel, value):
+    def translate_channel(cls, channel, value):
         """Translate channel string."""
 
         if channel == 0:
@@ -79,6 +79,8 @@ class HWB(generic.HWB):
             return parse.norm_percent_channel(value)
         elif channel == -1:
             return parse.norm_alpha_channel(value)
+        else:
+            raise ValueError("Unexpected channel index of '{}'".format(channel))
 
     @classmethod
     def split_channels(cls, color):
@@ -88,9 +90,9 @@ class HWB(generic.HWB):
         channels = []
         for i, c in enumerate(parse.RE_CHAN_SPLIT.split(color[start:-1].strip()), 0):
             if i <= 2:
-                channels.append(cls._tx_channel(i, c))
+                channels.append(cls.translate_channel(i, c))
             else:
-                channels.append(cls._tx_channel(-1, c))
+                channels.append(cls.translate_channel(-1, c))
         if len(channels) == 3:
             channels.append(1.0)
         return channels

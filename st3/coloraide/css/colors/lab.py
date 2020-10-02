@@ -46,16 +46,16 @@ class LAB(generic.LAB):
 
         options = kwargs
         if options.get("color"):
-            return self.to_generic_string(alpha=alpha, precision=precision, fit=fit, **kwargs)
+            return super().to_string(alpha=alpha, precision=precision, fit=fit, **kwargs)
 
         value = ''
         if options.get("gray") and self.is_achromatic():
-            if alpha is not False and (alpha is True or self._alpha < 1.0):
+            if alpha is not False and (alpha is True or self.alpha < 1.0):
                 value = self._get_graya(options, precision=precision, fit=fit)
             else:
                 value = self._get_gray(options, precision=precision, fit=fit)
         else:
-            if alpha is not False and (alpha is True or self._alpha < 1.0):
+            if alpha is not False and (alpha is True or self.alpha < 1.0):
                 value = self._get_laba(options, precision=precision, fit=fit)
             else:
                 value = self._get_lab(options, precision=precision, fit=fit)
@@ -83,7 +83,7 @@ class LAB(generic.LAB):
             util.fmt_float(coords[0], precision),
             util.fmt_float(coords[1], precision),
             util.fmt_float(coords[2], precision),
-            util.fmt_float(self._alpha, max(util.DEF_PREC, precision))
+            util.fmt_float(self.alpha, max(util.DEF_PREC, precision))
         )
 
     def _get_gray(self, options, *, precision=util.DEF_PREC, fit=util.DEF_FIT):
@@ -104,11 +104,11 @@ class LAB(generic.LAB):
         coords = self.fit_coords(method=fit) if fit else self.coords()
         return template.format(
             util.fmt_float(coords[0], precision),
-            util.fmt_float(self._alpha, max(3, precision))
+            util.fmt_float(self.alpha, max(3, precision))
         )
 
     @classmethod
-    def _tx_channel(cls, channel, value):
+    def translate_channel(cls, channel, value):
         """Translate channel string."""
 
         if channel == 0:
@@ -117,6 +117,8 @@ class LAB(generic.LAB):
             return float(value)
         elif channel == -1:
             return parse.norm_alpha_channel(value)
+        else:
+            raise ValueError("Unexpected channel index of '{}'".format(channel))
 
     @classmethod
     def split_channels(cls, color):
@@ -128,9 +130,9 @@ class LAB(generic.LAB):
             alpha = None
             for i, c in enumerate(parse.RE_CHAN_SPLIT.split(color[start:-1].strip()), 0):
                 if i == 0:
-                    channels.append(cls._tx_channel(i, c))
+                    channels.append(cls.translate_channel(i, c))
                 else:
-                    alpha = cls._tx_channel(-1, c)
+                    alpha = cls.translate_channel(-1, c)
             channels.extend([0.0, 0.0])
             channels.append(1.0 if alpha is None else alpha)
         else:
@@ -138,9 +140,9 @@ class LAB(generic.LAB):
             channels = []
             for i, c in enumerate(parse.RE_CHAN_SPLIT.split(color[start:-1].strip()), 0):
                 if i <= 2:
-                    channels.append(cls._tx_channel(i, c))
+                    channels.append(cls.translate_channel(i, c))
                 else:
-                    channels.append(cls._tx_channel(-1, c))
+                    channels.append(cls.translate_channel(-1, c))
             if len(channels) == 3:
                 channels.append(1.0)
         return channels

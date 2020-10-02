@@ -1,19 +1,19 @@
 """LAB class."""
-from ._space import Space, RE_GENERIC_MATCH
-from ._tools import Tools, GamutUnbound, GamutBound
+from ._space import Space, RE_DEFAULT_MATCH
+from ._gamut import GamutUnbound, GamutBound
 from . import _convert as convert
 from . import _parse as parse
 from .. import util
 import re
 
 
-class LAB(Tools, Space):
+class LAB(Space):
     """LAB class."""
 
     SPACE = "lab"
     DEF_BG = "color(lab 0 0 0 / 1)"
     CHANNEL_NAMES = frozenset(["l", "a", "b", "alpha"])
-    GENERIC_MATCH = re.compile(RE_GENERIC_MATCH.format(color_space=SPACE))
+    DEFAULT_MATCH = re.compile(RE_DEFAULT_MATCH.format(color_space=SPACE))
 
     _gamut = (
         (GamutBound(0), GamutUnbound(100.0)),  # Technically we could/should clamp the zero side.
@@ -27,20 +27,20 @@ class LAB(Tools, Space):
         super().__init__(color)
 
         if isinstance(color, Space):
-            self._cl, self._ca, self._cb = convert.convert(color.coords(), color.space(), self.space())
-            self._alpha = color._alpha
+            self.l, self.a, self.b = convert.convert(color.coords(), color.space(), self.space())
+            self.alpha = color.alpha
         elif isinstance(color, str):
             values = self.match(color)[0]
             if values is None:
                 raise ValueError("'{}' does not appear to be a valid color".format(color))
-            self._cl, self._ca, self._cb, self._alpha = values
+            self.l, self.a, self.b, self.alpha = values
         elif isinstance(color, (list, tuple)):
             if not (3 <= len(color) <= 4):
                 raise ValueError("A list of channel values should be of length 3 or 4.")
-            self._cl = color[0]
-            self._ca = color[1]
-            self._cb = color[2]
-            self._alpha = 1.0 if len(color) == 3 else color[3]
+            self.l = color[0]
+            self.a = color[1]
+            self.b = color[2]
+            self.alpha = 1.0 if len(color) == 3 else color[3]
         else:
             raise TypeError("Unexpected type '{}' received".format(type(color)))
 
@@ -49,61 +49,6 @@ class LAB(Tools, Space):
 
         l, a, b = [util.round_half_up(c, scale=util.DEF_PREC) for c in coords]
         return abs(a) < util.ACHROMATIC_THRESHOLD and abs(b) < util.ACHROMATIC_THRESHOLD
-
-    @property
-    def _cl(self):
-        """Hue channel."""
-
-        return self._coords[0]
-
-    @_cl.setter
-    def _cl(self, value):
-        """
-        Set hue channel.
-
-        Theoretically, there is no upper bound here. HDR may use much higher.
-
-        TODO: Do we clamp the higher end or not?
-        """
-
-        self._coords[0] = value
-
-    @property
-    def _ca(self):
-        """A on LAB axis."""
-
-        return self._coords[1]
-
-    @_ca.setter
-    def _ca(self, value):
-        """
-        Set A on LAB axis.
-
-        Theoretically unbounded. It is mentioned in the
-        specification that generally the range is +/- 160.
-
-        TODO: Should we not clamp this?
-        """
-
-        self._coords[1] = value
-
-    @property
-    def _cb(self):
-        """B on LAB axis."""
-
-        return self._coords[2]
-
-    @_cb.setter
-    def _cb(self, value):
-        """
-        Set B on LAB axis.
-
-        Theoretically unbounded.
-
-        TODO: Should we not clamp this?
-        """
-
-        self._coords[2] = value
 
     def _mix(self, channels1, channels2, factor, factor2=1.0, **kwargs):
         """Blend the color with the given color."""
@@ -118,45 +63,50 @@ class LAB(Tools, Space):
     def l(self):
         """L channel."""
 
-        return self._cl
+        return self._coords[0]
 
     @l.setter
     def l(self, value):
         """Get true luminance."""
 
-        self._cl = self._tx_channel(0, value) if isinstance(value, str) else float(value)
+        self._coords[0] = self.translate_channel(0, value) if isinstance(value, str) else float(value)
 
     @property
     def a(self):
         """A channel."""
 
-        return self._ca
+        return self._coords[1]
 
     @a.setter
     def a(self, value):
         """A axis."""
 
-        self._ca = self._tx_channel(1, value) if isinstance(value, str) else float(value)
+        self._coords[1] = self.translate_channel(1, value) if isinstance(value, str) else float(value)
 
     @property
     def b(self):
         """B channel."""
 
-        return self._cb
+        return self._coords[2]
 
     @b.setter
     def b(self, value):
         """B axis."""
 
-        self._cb = self._tx_channel(2, value) if isinstance(value, str) else float(value)
+        self._coords[2] = self.translate_channel(2, value) if isinstance(value, str) else float(value)
 
     @classmethod
-    def _tx_channel(cls, channel, value):
+    def translate_channel(cls, channel, value):
         """Translate channel string."""
 
-        return float(value) if channel > 0 else parse.norm_alpha_channel(value)
+        if 0 <= channel <= 2:
+            return float(value)
+        elif channel == -1:
+            return parse.norm_alpha_channel(value)
+        else:
+            raise ValueError("Unexpected channel index of '{}'".format(channel))
 
     def to_string(self, *, alpha=None, precision=util.DEF_PREC, fit=util.DEF_FIT, **kwargs):
         """To string."""
 
-        return self.to_generic_string(alpha=alpha, precision=precision, fit=fit)
+        return super().to_string(alpha=alpha, precision=precision, fit=fit)

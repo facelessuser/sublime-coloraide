@@ -1,19 +1,19 @@
 """HWB class."""
-from ._space import Space, RE_GENERIC_MATCH
-from ._tools import Tools, GamutBound, GamutAngle
+from ._space import Space, RE_DEFAULT_MATCH
+from ._gamut import GamutBound, GamutAngle
 from . import _convert as convert
 from . import _parse as parse
 from .. import util
 import re
 
 
-class HWB(Tools, Space):
+class HWB(Space):
     """HWB class."""
 
     SPACE = "hwb"
     DEF_BG = "color(hwb 0 0 0 / 1)"
     CHANNEL_NAMES = frozenset(["hue", "blackness", "whiteness", "alpha"])
-    GENERIC_MATCH = re.compile(RE_GENERIC_MATCH.format(color_space=SPACE))
+    DEFAULT_MATCH = re.compile(RE_DEFAULT_MATCH.format(color_space=SPACE))
 
     _gamut = (
         (GamutAngle(0.0), GamutAngle(360.0)),
@@ -27,20 +27,20 @@ class HWB(Tools, Space):
         super().__init__(color)
 
         if isinstance(color, Space):
-            self._ch, self._cw, self._cb = convert.convert(color.coords(), color.space(), self.space())
-            self._alpha = color._alpha
+            self.hue, self.whiteness, self.blackness = convert.convert(color.coords(), color.space(), self.space())
+            self.alpha = color.alpha
         elif isinstance(color, str):
             values = self.match(color)[0]
             if values is None:
                 raise ValueError("'{}' does not appear to be a valid color".format(color))
-            self._ch, self._cw, self._cb, self._alpha = values
+            self.hue, self.whiteness, self.blackness, self.alpha = values
         elif isinstance(color, (list, tuple)):
             if not (3 <= len(color) <= 4):
                 raise ValueError("A list of channel values should be of length 3 or 4.")
-            self._ch = color[0]
-            self._cw = color[1]
-            self._cb = color[2]
-            self._alpha = 1.0 if len(color) == 3 else color[3]
+            self.hue = color[0]
+            self.whiteness = color[1]
+            self.blackness = color[2]
+            self.alpha = 1.0 if len(color) == 3 else color[3]
         else:
             raise TypeError("Unexpected type '{}' received".format(type(color)))
 
@@ -57,44 +57,8 @@ class HWB(Tools, Space):
         Gives us an opportunity to normalize hues and things like that, if we desire.
         """
 
-        if not (0.0 <= self._ch <= 360.0):
-            self._ch = self._ch % 360.0
-
-    @property
-    def _ch(self):
-        """Hue channel."""
-
-        return self._coords[0]
-
-    @_ch.setter
-    def _ch(self, value):
-        """Set hue channel."""
-
-        self._coords[0] = value
-
-    @property
-    def _cw(self):
-        """Whiteness channel."""
-
-        return self._coords[1]
-
-    @_cw.setter
-    def _cw(self, value):
-        """Set whiteness channel."""
-
-        self._coords[1] = value
-
-    @property
-    def _cb(self):
-        """Blackness channel."""
-
-        return self._coords[2]
-
-    @_cb.setter
-    def _cb(self, value):
-        """Set blackness channel."""
-
-        self._coords[2] = value
+        if not (0.0 <= self.hue <= 360.0):
+            self.hue = self.hue % 360.0
 
     def _mix(self, channels1, channels2, factor, factor2=1.0, hue=util.DEF_HUE_ADJ, **kwargs):
         """Blend the color with the given color."""
@@ -111,40 +75,40 @@ class HWB(Tools, Space):
     def hue(self):
         """Hue channel."""
 
-        return self._ch
+        return self._coords[0]
 
     @hue.setter
     def hue(self, value):
         """Shift the hue."""
 
-        self._ch = self._tx_channel(1, value) if isinstance(value, str) else float(value)
+        self._coords[0] = self.translate_channel(1, value) if isinstance(value, str) else float(value)
 
     @property
     def whiteness(self):
         """Whiteness channel."""
 
-        return self._cw
+        return self._coords[1]
 
     @whiteness.setter
     def whiteness(self, value):
         """Set whiteness channel."""
 
-        self._cw = self._tx_channel(2, value) if isinstance(value, str) else float(value)
+        self._coords[1] = self.translate_channel(2, value) if isinstance(value, str) else float(value)
 
     @property
     def blackness(self):
         """Blackness channel."""
 
-        return self._cb
+        return self._coords[2]
 
     @blackness.setter
     def blackness(self, value):
         """Set blackness channel."""
 
-        self._cb = self._tx_channel(3, value) if isinstance(value, str) else float(value)
+        self._coords[2] = self.translate_channel(3, value) if isinstance(value, str) else float(value)
 
     @classmethod
-    def _tx_channel(cls, channel, value):
+    def translate_channel(cls, channel, value):
         """Translate channel string."""
 
         if channel == 0:
@@ -153,8 +117,10 @@ class HWB(Tools, Space):
             return float(value)
         elif channel == -1:
             return parse.norm_alpha_channel(value)
+        else:
+            raise ValueError("Unexpected channel index of '{}'".format(channel))
 
     def to_string(self, *, alpha=None, precision=util.DEF_PREC, fit=util.DEF_FIT, **kwargs):
         """To string."""
 
-        return self.to_generic_string(alpha=alpha, precision=precision, fit=fit)
+        return super().to_string(alpha=alpha, precision=precision, fit=fit)

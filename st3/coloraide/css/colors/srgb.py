@@ -57,11 +57,11 @@ class SRGB(generic.SRGB):
 
         options = kwargs
         if options.get("color"):
-            return self.to_generic_string(alpha=alpha, precision=precision, fit=fit, **kwargs)
+            return super().to_string(alpha=alpha, precision=precision, fit=fit, **kwargs)
 
         value = ''
         if options.get("hex") or options.get("names"):
-            if alpha is not False and (alpha is True or self._alpha < 1.0):
+            if alpha is not False and (alpha is True or self.alpha < 1.0):
                 h = self._get_hexa(options, precision=precision, fit=fit)
             else:
                 h = self._get_hex(options, precision=precision, fit=fit)
@@ -77,7 +77,7 @@ class SRGB(generic.SRGB):
                     value = n
 
         if not value:
-            if alpha is not False and (alpha is True or self._alpha < 1.0):
+            if alpha is not False and (alpha is True or self.alpha < 1.0):
                 value = self._get_rgba(options, precision=precision, fit=fit)
             else:
                 value = self._get_rgb(options, precision=precision, fit=fit)
@@ -121,7 +121,7 @@ class SRGB(generic.SRGB):
             util.fmt_float(coords[0] * factor, precision),
             util.fmt_float(coords[1] * factor, precision),
             util.fmt_float(coords[2] * factor, precision),
-            util.fmt_float(self._alpha, max(util.DEF_PREC, precision))
+            util.fmt_float(self.alpha, max(util.DEF_PREC, precision))
         )
 
     def _get_hexa(self, options, *, precision=util.DEF_PREC, fit="clip"):
@@ -142,7 +142,7 @@ class SRGB(generic.SRGB):
             int(util.round_half_up(coords[0] * 255.0)),
             int(util.round_half_up(coords[1] * 255.0)),
             int(util.round_half_up(coords[2] * 255.0)),
-            int(util.round_half_up(self._alpha * 255.0))
+            int(util.round_half_up(self.alpha * 255.0))
         )
 
         if compress:
@@ -178,19 +178,21 @@ class SRGB(generic.SRGB):
         return value
 
     @classmethod
-    def _tx_channel(cls, channel, value):
+    def translate_channel(cls, channel, value):
         """Translate channel string."""
 
         if channel in (0, 1, 2):
             if value.startswith('#'):
-                return int(value[1:], 16) * parse.RGB_CHANNEL_SCALE
+                return parse.norm_hex_channel(value)
             else:
                 return parse.norm_rgb_channel(value)
         elif channel == -1:
             if value.startswith('#'):
-                return int(value[1:], 16) * parse.RGB_CHANNEL_SCALE
+                return parse.norm_hex_channel(value)
             else:
                 return parse.norm_alpha_channel(value)
+        else:
+            raise ValueError("Unexpected channel index of '{}'".format(channel))
 
     @classmethod
     def split_channels(cls, color):
@@ -201,9 +203,9 @@ class SRGB(generic.SRGB):
             channels = []
             for i, c in enumerate(parse.RE_CHAN_SPLIT.split(color[start:-1].strip()), 0):
                 if i <= 2:
-                    channels.append(cls._tx_channel(i, c))
+                    channels.append(cls.translate_channel(i, c))
                 else:
-                    channels.append(cls._tx_channel(-1, c))
+                    channels.append(cls.translate_channel(-1, c))
             if len(channels) == 3:
                 channels.append(1.0)
             return channels
@@ -212,17 +214,17 @@ class SRGB(generic.SRGB):
             assert(m is not None)
             if m.group(1):
                 return (
-                    cls._tx_channel(0, "#" + color[1:3]),
-                    cls._tx_channel(1, "#" + color[3:5]),
-                    cls._tx_channel(2, "#" + color[5:7]),
-                    cls._tx_channel(-1, "#" + m.group(2)) if m.group(2) else 1.0
+                    cls.translate_channel(0, "#" + color[1:3]),
+                    cls.translate_channel(1, "#" + color[3:5]),
+                    cls.translate_channel(2, "#" + color[5:7]),
+                    cls.translate_channel(-1, "#" + m.group(2)) if m.group(2) else 1.0
                 )
             else:
                 return (
-                    cls._tx_channel(0, "#" + color[1] * 2),
-                    cls._tx_channel(1, "#" + color[2] * 2),
-                    cls._tx_channel(2, "#" + color[3] * 2),
-                    cls._tx_channel(-1, "#" + m.group(4)) if m.group(4) else 1.0
+                    cls.translate_channel(0, "#" + color[1] * 2),
+                    cls.translate_channel(1, "#" + color[2] * 2),
+                    cls.translate_channel(2, "#" + color[3] * 2),
+                    cls.translate_channel(-1, "#" + m.group(4)) if m.group(4) else 1.0
                 )
 
     @classmethod
