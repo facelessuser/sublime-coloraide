@@ -52,15 +52,6 @@ class XYZ(Space):
         mx = max(max(points[0], points[1]), points[2])
         return mn == mx
 
-    def _mix(self, channels1, channels2, factor, factor2=1.0, **kwargs):
-        """Blend the color with the given color."""
-
-        return (
-            self._mix_channel(channels1[0], channels2[0], factor, factor2),
-            self._mix_channel(channels1[1], channels2[1], factor, factor2),
-            self._mix_channel(channels1[2], channels2[2], factor, factor2)
-        )
-
     @property
     def x(self):
         """X channel."""
@@ -71,7 +62,7 @@ class XYZ(Space):
     def x(self, value):
         """Shift the X."""
 
-        self._coords[0] = float(value)
+        self._coords[0] = self.translate_channel(0, value) if isinstance(value, str) else float(value)
 
     @property
     def y(self):
@@ -83,7 +74,7 @@ class XYZ(Space):
     def y(self, value):
         """Set Y."""
 
-        self._coords[1] = float(value)
+        self._coords[1] = self.translate_channel(1, value) if isinstance(value, str) else float(value)
 
     @property
     def z(self):
@@ -95,14 +86,14 @@ class XYZ(Space):
     def z(self, value):
         """Set Z channel."""
 
-        self._coords[2] = float(value)
+        self._coords[2] = self.translate_channel(2, value) if isinstance(value, str) else float(value)
 
     @classmethod
     def translate_channel(cls, channel, value):
         """Translate channel string."""
 
         if channel in (0, 1, 2):
-            return float(value)
+            return parse.norm_float(value)
         elif channel == -1:
             return parse.norm_alpha_channel(value)
         else:

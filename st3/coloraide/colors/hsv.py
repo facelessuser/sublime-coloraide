@@ -48,7 +48,7 @@ class HSV(Space):
         """Is achromatic."""
 
         h, s, v = [util.round_half_up(c, scale=util.DEF_PREC) for c in coords]
-        return s < util.ACHROMATIC_THRESHOLD
+        return s < util.ACHROMATIC_THRESHOLD or v < util.ACHROMATIC_THRESHOLD
 
     def _on_convert(self):
         """
@@ -59,17 +59,6 @@ class HSV(Space):
 
         if not (0.0 <= self.hue <= 360.0):
             self.hue = self.hue % 360.0
-
-    def _mix(self, channels1, channels2, factor, factor2=1.0, hue=util.DEF_HUE_ADJ, **kwargs):
-        """Blend the color with the given color."""
-
-        hue1 = util.NAN if self._is_achromatic(channels1) else channels1[0]
-        hue2 = util.NAN if self._is_achromatic(channels2) else channels2[0]
-        return (
-            self._hue_mix_channel(hue1, hue2, factor, factor2, hue=hue),
-            self._mix_channel(channels1[1], channels2[1], factor, factor2),
-            self._mix_channel(channels1[2], channels2[2], factor, factor2)
-        )
 
     @property
     def hue(self):
@@ -114,7 +103,7 @@ class HSV(Space):
         if channel == 0:
             return parse.norm_deg_channel(value)
         elif channel in (1, 2):
-            return float(value)
+            return parse.norm_float(value)
         elif channel == -1:
             return parse.norm_alpha_channel(value)
         else:
