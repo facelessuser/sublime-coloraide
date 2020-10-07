@@ -37,13 +37,13 @@ def lch_chroma(base, color):
     space = color.space()
     clipped = color.clone()
     clipped.fit(space=space, method="clip", in_place=True)
-    base_error = base.distance(clipped, "de-2000")
+    base_error = base.delta(clipped, method="2000")
 
     if base_error > 2.3:
         threshold = .001
         # Compare mapped against desired space
         mapcolor = color.convert("lch")
-        error = color.distance(mapcolor, "de-2000")
+        error = color.delta(mapcolor, method="2000")
         low = 0.0
         high = mapcolor.chroma
 
@@ -53,8 +53,8 @@ def lch_chroma(base, color):
         while (high - low) > threshold and error < base_error:
             clipped = mapcolor.clone()
             clipped.fit(space, method="clip", in_place=True)
-            delta = mapcolor.distance(clipped, "de-2000")
-            error = color.distance(mapcolor, "de-2000")
+            delta = mapcolor.delta(clipped, method="2000")
+            error = color.delta(mapcolor, method="2000")
             if delta - 2 < threshold:
                 low = mapcolor.chroma
             else:
@@ -100,8 +100,11 @@ def clip(base, color):
 class Gamut:
     """Gamut handling."""
 
-    def fit_coords(self, space=None, *, method=util.DEF_FIT):
+    def fit_coords(self, space=None, *, method=None):
         """Get coordinates within this space or fit to another space."""
+
+        if method is None:
+            method = self.get_default("fit")
 
         space = (self.space() if space is None else space).lower()
         method = self.space() if method is None else method
@@ -111,8 +114,11 @@ class Gamut:
             return clone.coords()
         return self.coords()
 
-    def fit(self, space=None, *, method="lch-chroma", in_place=False):
+    def fit(self, space=None, *, method=None, in_place=False):
         """Fit the gamut using the provided method."""
+
+        if method is None:
+            method = self.get_default("fit")
 
         this = self if in_place else self.clone()
 
@@ -123,7 +129,7 @@ class Gamut:
             func = lch_chroma
         else:
             # Unknown fit method
-            raise ValueError("'{}' gamut mapping is not currently supported")
+            raise ValueError("'{}' gamut mapping is not currently supported".format(method))
 
         # Convert to desired space
         if space is not None:
@@ -133,7 +139,8 @@ class Gamut:
 
         # If we are perfectly in gamut, don't waste time fitting
         if c.in_gamut(tolerance=0.0):
-            return
+            this.update(c)
+            return this
 
         # Apply mapping/clipping/etc.
         fit = func(self.clone(), c)
@@ -142,7 +149,6 @@ class Gamut:
 
         # Adjust "this" color
         this.update(c)
-        this._on_convert()
         return this
 
     def in_gamut(self, space=None, *, tolerance=util.DEF_FIT_TOLERANCE):

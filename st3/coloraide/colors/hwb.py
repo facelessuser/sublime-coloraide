@@ -1,5 +1,6 @@
 """HWB class."""
 from ._space import Space, RE_DEFAULT_MATCH
+from ._cylindrical import Cylindrical
 from ._gamut import GamutBound, GamutAngle
 from . import _convert as convert
 from . import _parse as parse
@@ -7,7 +8,7 @@ from .. import util
 import re
 
 
-class HWB(Space):
+class HWB(Cylindrical, Space):
     """HWB class."""
 
     SPACE = "hwb"
@@ -44,21 +45,11 @@ class HWB(Space):
         else:
             raise TypeError("Unexpected type '{}' received".format(type(color)))
 
-    def _is_achromatic(self, coords):
-        """Is achromatic."""
+    def is_hue_null(self):
+        """Test if hue is null."""
 
-        h, w, b = [util.round_half_up(c, scale=util.DEF_PREC) for c in coords]
+        h, w, b = self.coords()
         return (w + b) > (100.0 - util.ACHROMATIC_THRESHOLD)
-
-    def _on_convert(self):
-        """
-        Run after a convert operation.
-
-        Gives us an opportunity to normalize hues and things like that, if we desire.
-        """
-
-        if not (0.0 <= self.hue <= 360.0):
-            self.hue = self.hue % 360.0
 
     @property
     def hue(self):
@@ -109,7 +100,7 @@ class HWB(Space):
         else:
             raise ValueError("Unexpected channel index of '{}'".format(channel))
 
-    def to_string(self, *, alpha=None, precision=util.DEF_PREC, fit=util.DEF_FIT, **kwargs):
+    def to_string(self, *, alpha=None, precision=util.DEF_PREC, fit=True, **kwargs):
         """To string."""
 
         return super().to_string(alpha=alpha, precision=precision, fit=fit)

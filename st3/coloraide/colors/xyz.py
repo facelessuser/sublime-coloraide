@@ -44,14 +44,6 @@ class XYZ(Space):
         else:
             raise TypeError("Unexpected type '{}' received".format(type(color)))
 
-    def _is_achromatic(self, coords):
-        """Is achromatic."""
-
-        points = [util.round_half_up(c) for c in util.divide(coords, convert.D50_REF_WHITE)]
-        mn = min(min(points[0], points[1]), points[2])
-        mx = max(max(points[0], points[1]), points[2])
-        return mn == mx
-
     @property
     def x(self):
         """X channel."""
@@ -99,7 +91,7 @@ class XYZ(Space):
         else:
             raise ValueError("Unexpected channel index of '{}'".format(channel))
 
-    def to_string(self, *, options=None, alpha=None, precision=util.DEF_PREC, fit=util.DEF_FIT, **kwargs):
+    def to_string(self, *, options=None, alpha=None, precision=util.DEF_PREC, fit=True, **kwargs):
         """To string."""
 
         return super().to_string(alpha=alpha, precision=precision, fit=fit)

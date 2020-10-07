@@ -11,7 +11,11 @@ from .prophoto_rgb import ProPhoto_RGB
 from .rec2020 import Rec2020
 from .xyz import XYZ
 from .. import util
+from ._cylindrical import Cylindrical
 import functools
+
+DEF_FIT = "lch-chroma"
+DEF_DELTA_E = "76"
 
 SUPPORTED = (
     HSL, HWB, LAB, LCH, SRGB, HSV,
@@ -19,7 +23,7 @@ SUPPORTED = (
 )
 
 
-def interpolate(percent, color=None, interp=None):
+def _interpolate(percent, color=None, interp=None):
     """Wrapper for interpolate."""
 
     obj = interp(percent)
@@ -49,23 +53,35 @@ class Color:
 
     CS_MAP = {obj.space(): obj for obj in SUPPORTED}
 
-    def __init__(self, color, data=None, alpha=util.DEF_ALPHA, *, filters=None):
+    def __init__(self, color, data=None, alpha=util.DEF_ALPHA, *, filters=None, **kwargs):
         """Initialize."""
 
-        self._attach(self._parse(color, data, alpha, filters=filters))
+        self.defaults = {
+            "fit": DEF_FIT,
+            "delta": DEF_DELTA_E
+        }
+        self._attach(self._parse(color, data, alpha, filters=filters, **kwargs))
 
-    def __repr__(self):
-        """Representation."""
+    def is_hue_null(self, space="lch"):
+        """Check if hue is treated as null."""
 
-        return repr(self._color)
+        space = space.lower()
+        this = self if self.space() == space else self.convert(space)
+        if isinstance(this._color, Cylindrical):
+            return this._color.is_hue_null()
+        else:
+            return False
 
-    __str__ = __repr__
+    def get_default(self, name):
+        """Get default."""
+
+        return self.defaults[name]
 
     def _attach(self, color):
         """Attach the this objects convert space to the color."""
 
         self._color = color
-        self._color.spaces = {k: v for k, v in self.CS_MAP.items()}
+        self._color.parent = self
 
     def _handle_color_input(self, color):
         """Handle color input."""
@@ -79,7 +95,7 @@ class Color:
         return color
 
     @classmethod
-    def _parse(cls, color, data=None, alpha=util.DEF_ALPHA, filters=None):
+    def _parse(cls, color, data=None, alpha=util.DEF_ALPHA, filters=None, **kwargs):
         """Parse the color."""
 
         obj = None
@@ -141,10 +157,10 @@ class Color:
         return self._color.coords()
 
     @classmethod
-    def new(cls, color, data=None, alpha=util.DEF_ALPHA, *, filters=None):
+    def new(cls, color, data=None, alpha=util.DEF_ALPHA, *, filters=None, **kwargs):
         """Create new color object."""
 
-        return cls(color, data, alpha, filters=filters)
+        return cls(color, data, alpha, filters=filters, **kwargs)
 
     def clone(self):
         """Clone."""
@@ -160,17 +176,17 @@ class Color:
             return self._attach(obj)
         return type(self)(obj.space(), obj.coords(), obj.alpha)
 
-    def update(self, color, data=None, alpha=util.DEF_ALPHA, *, filters=None):
+    def update(self, color, data=None, alpha=util.DEF_ALPHA, *, filters=None, **kwargs):
         """Update the existing color space with the provided color."""
 
-        obj = self._parse(color, data, alpha, filters=filters)
+        obj = self._parse(color, data, alpha, filters=filters, **kwargs)
         self._color.update(obj)
         return self
 
-    def mutate(self, color, data=None, alpha=util.DEF_ALPHA, *, filters=None):
+    def mutate(self, color, data=None, alpha=util.DEF_ALPHA, *, filters=None, **kwargs):
         """Mutate the current color to a new color."""
 
-        self._attach(self._parse(color, data, alpha, filters=filters))
+        self._attach(self._parse(color, data, alpha, filters=filters, **kwargs))
         return self
 
     def to_string(self, **kwargs):
@@ -178,34 +194,12 @@ class Color:
 
         return self._color.to_string(**kwargs)
 
-    def get(self, name):
-        """Get channel."""
+    def __repr__(self):
+        """Representation."""
 
-        return self._color.get(name)
+        return repr(self._color)
 
-    def set(self, name, value):  # noqa: A003
-        """Set channel."""
-
-        self._color.set(name, value)
-        return self
-
-    def is_achromatic(self):
-        """Check if color is is_achromatic."""
-
-        return self._color.is_achromatic()
-
-    def interpolate(self, color, *, space="lab", progress=None, out_space=None, alpha=True, hue=util.DEF_HUE_ADJ):
-        """Interpolate."""
-
-        color = self._handle_color_input(color)
-        interp = self._color.interpolate(color, space=space, progress=progress, out_space=None, alpha=alpha, hue=hue)
-        return functools.partial(interpolate, color=self.clone(), interp=interp)
-
-    def distance(self, color, method="euclidean", **kwargs):
-        """Get distance between this color and the provided color."""
-
-        color = self._handle_color_input(color)
-        return self._color.distance(color, method=method, **kwargs)
+    __str__ = __repr__
 
     def luminance(self):
         """Get color's luminance."""
@@ -218,6 +212,18 @@ class Color:
         color = self._handle_color_input(color)
         return self._color.contrast_ratio(color)
 
+    def distance(self, color, *, space=util.DEF_DISTANCE_SPACE):
+        """Get distance between this color and the provided color."""
+
+        color = self._handle_color_input(color)
+        return self._color.distance(color, space=space)
+
+    def delta(self, color, *, method=None, **kwargs):
+        """Delta E distance."""
+
+        color = self._handle_color_input(color)
+        return self._color.delta(color, method=method, **kwargs)
+
     def overlay(self, background=None, *, space=None, in_place=False):
         """Apply the given transparency with the given background."""
 
@@ -228,16 +234,29 @@ class Color:
             return self.new(obj.space(), obj.coords(), obj.alpha)
         return self
 
-    def mix(self, color, percent=util.DEF_MIX, *, space=None, hue=util.DEF_HUE_ADJ, in_place=False):
+    def interpolate(self, color, *, space="lab", progress=None, out_space=None, adjust=None, hue=util.DEF_HUE_ADJ):
+        """Interpolate."""
+
+        color = self._handle_color_input(color)
+        interp = self._color.interpolate(color, space=space, progress=progress, out_space=None, adjust=adjust, hue=hue)
+        return functools.partial(_interpolate, color=self.clone(), interp=interp)
+
+    def steps(self, color, *, steps=2, max_steps=1000, max_delta=0, **kwargs):
+        """Interpolate discrete steps."""
+
+        color = self._handle_color_input(color)
+        return self._color.steps(color, steps=steps, max_steps=max_steps, max_delta=max_delta, **kwargs)
+
+    def mix(self, color, percent=util.DEF_MIX, *, space=None, adjust=None, hue=util.DEF_HUE_ADJ, in_place=False):
         """Mix the two colors."""
 
         color = self._handle_color_input(color)
-        obj = self._color.mix(color, percent, space=space, hue=hue, in_place=in_place)
+        obj = self._color.mix(color, percent, space=space, adjust=adjust, hue=hue, in_place=in_place)
         if not in_place:
             return self.new(obj.space(), obj.coords(), obj.alpha)
         return self
 
-    def fit(self, space=None, *, method=util.DEF_FIT, in_place=False):
+    def fit(self, space=None, *, method=None, in_place=False):
         """Fit gamut."""
 
         obj = self._color.fit(space, method=method, in_place=in_place)
@@ -249,6 +268,38 @@ class Color:
         """Check if in gamut."""
 
         return self._color.in_gamut(space, tolerance=tolerance)
+
+    def get(self, name):
+        """Get channel."""
+
+        # Handle space.attribute
+        if '.' in name:
+            parts = name.split('.')
+            if len(parts) != 2:
+                raise ValueError("Could not resolve attribute '{}'".format(name))
+            obj = self.convert(parts[0])
+            return obj.get(parts[1])
+
+        return self._color.get(name)
+
+    def set(self, name, value):  # noqa: A003
+        """Set channel."""
+
+        # Handle space.attribute
+        if '.' in name:
+            parts = name.split('.')
+            if len(parts) != 2:
+                raise ValueError("Could not resolve attribute '{}'".format(name))
+            obj = self.convert(parts[0])
+            obj.set(parts[1], value)
+            return self.update(obj)
+
+        # Handle a function that modifies the value or a direct value
+        if callable(value):
+            self.set(name, value(self.get(name)))
+        else:
+            self._color.set(name, value)
+        return self
 
     def __getattr__(self, name):
         """Get attribute."""
