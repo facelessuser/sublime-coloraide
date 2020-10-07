@@ -28,7 +28,7 @@ def _interpolate(p, progress, c1, c2):
     elif math.isnan(c2):
         return c1
     else:
-        return c1 + (c2 - c1) * p if progress is None else progress(p)
+        return c1 + (c2 - c1) * (p if progress is None else progress(p))
 
 
 def interpolate(p, coords1, coords2, create, progress, inspace, outspace):
@@ -108,8 +108,8 @@ class Interpolate:
             else:
                 space = space.lower()
 
-            this = self.convert(space)
-            background = background.convert(space)
+            this = self.convert(space, fit=True)
+            background = background.convert(space, fit=True)
 
             if this is None:
                 raise ValueError('Invalid colorspace value: {}'.format(space))
@@ -150,7 +150,7 @@ class Interpolate:
             return self.update(obj)
         return obj
 
-    def interpolate(self, color, space="lab", *, out_space=None, progress=None, alpha=True, hue=util.DEF_HUE_ADJ):
+    def interpolate(self, color, *, space="lab", out_space=None, progress=None, alpha=True, hue=util.DEF_HUE_ADJ):
         """Return an interpolation function."""
 
         if progress is not None and not callable(progress):
