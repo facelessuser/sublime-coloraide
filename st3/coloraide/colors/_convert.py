@@ -1,5 +1,4 @@
 """Convert utilities."""
-from colorsys import rgb_to_hsv, hsv_to_rgb  # noqa: F401
 import math
 from .. import util
 
@@ -16,13 +15,25 @@ CONVERT_SPACES = ("srgb", "hsl", "hwb", "lch", "lab", "hsv", "display-p3", "a98-
 def hsv_to_srgb(h, s, v):
     """HSV to RGB."""
 
-    return hsv_to_rgb(h / 360.0, s / 100.0, v / 100.0)
+    return hsl_to_srgb(*hsv_to_hsl(h, s, v))
 
 
 def hsv_to_hsl(h, s, v):
-    """HSV to HSL."""
+    """
+    HSV to HSL.
 
-    return srgb_to_hsl(*hsv_to_srgb(h, s, v))
+    https://en.wikipedia.org/wiki/HSL_and_HSV#Interconversion
+    """
+
+    s /= 100.0
+    v /= 100.0
+    l = v * (1.0 - s / 2.0)
+
+    return [
+        h,
+        0.0 if (l == 0.0 or l == 0.0) else ((v - l) / min(l, 1.0 - l)) * 100,
+        l * 100
+    ]
 
 
 def hsv_to_hwb(h, s, v):
@@ -84,8 +95,7 @@ def hsv_to_rec2020(h, s, v):
 def srgb_to_hsv(r, g, b):
     """SRGB to HSV."""
 
-    h, s, v = rgb_to_hsv(r, g, b)
-    return h * 360.0, s * 100.0, v * 100.0
+    return hsl_to_hsv(*srgb_to_hsl(r, g, b))
 
 
 def srgb_to_hsl(r, g, b):
@@ -455,9 +465,22 @@ def rec2020_to_prophoto_rgb(r, g, b):
 # HSL
 ############
 def hsl_to_hsv(h, s, l):
-    """HSL to HSV."""
+    """
+    HSL to HSV.
 
-    return srgb_to_hsv(*hsl_to_srgb(h, s, l))
+    https://en.wikipedia.org/wiki/HSL_and_HSV#Interconversion
+    """
+
+    s /= 100.0
+    l /= 100.0
+
+    v = l + s * min(l, 1.0 - l)
+
+    return [
+        h,
+        0.0 if (v == 0.0) else 200.0 * (1.0 - l / v),
+        100.0 * v
+    ]
 
 
 def hsl_to_srgb(h, s, l):
@@ -899,13 +922,12 @@ def lin_srgb_to_xyz(rgb):
     Convert an array of linear-light sRGB values to CIE XYZ using sRGB's own white.
 
     D65 (no chromatic adaptation)
-    http://www.brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html
     """
 
     m = [
-        [0.4124564, 0.3575761, 0.1804375],
-        [0.2126729, 0.7151522, 0.0721750],
-        [0.0193339, 0.1191920, 0.9503041]
+        [0.41239079926595934, 0.357584339383878, 0.1804807884018343],
+        [0.21263900587151027, 0.715168678767756, 0.07219231536073371],
+        [0.01933081871559182, 0.11919477979462598, 0.9505321522496607]
     ]
 
     return util.dot(m, rgb)
@@ -915,9 +937,9 @@ def xyz_to_lin_srgb(xyz):
     """Convert XYZ to linear-light sRGB."""
 
     m = [
-        [3.2404542, -1.5371385, -0.4985314],
-        [-0.9692660, 1.8760108, 0.0415560],
-        [0.0556434, -0.2040259, 1.0572252]
+        [3.2409699419045226, -1.537383177570094, -0.4986107602930034],
+        [-0.9692436362808796, 1.8759675015077202, 0.04155505740717559],
+        [0.05563007969699366, -0.20397695888897652, 1.0569715142428786]
     ]
 
     return util.dot(m, xyz)
@@ -1051,7 +1073,15 @@ def lin_2020(rgb):
     alpha = 1.09929682680944
     beta = 0.018053968510807
 
-    return [c / 4.5 if c < beta * 4.5 else math.pow((c + alpha - 1) / alpha, 2.4) for c in rgb]
+    result = []
+    for i in rgb:
+        # Mirror linear nature of algorithm on the negative axis
+        abs_i = abs(i)
+        if abs_i < beta * 4.5:
+            result.append(i / 4.5)
+        else:
+            result.append(math.copysign(math.pow((abs_i + alpha - 1) / alpha, 1 / 0.45), i))
+    return result
 
 
 def gam_2020(rgb):
@@ -1060,7 +1090,15 @@ def gam_2020(rgb):
     alpha = 1.09929682680944
     beta = 0.018053968510807
 
-    return [alpha * math.pow(c, 1 / 2.4) - (alpha - 1) if c > beta else 4.5 * c for c in rgb]
+    result = []
+    for i in rgb:
+        # Mirror linear nature of algorithm on the negative axis
+        abs_i = abs(i)
+        if abs_i > beta:
+            result.append(math.copysign(alpha * math.pow(abs_i, 0.45) - (alpha - 1), i))
+        else:
+            result.append(4.5 * i)
+    return result
 
 
 def lin_prophoto(rgb):
@@ -1071,7 +1109,16 @@ def lin_prophoto(rgb):
     """
 
     et2 = 16 / 512
-    return [c / 16 if c <= et2 else math.pow(c, 1.8) for c in rgb]
+
+    result = []
+    for i in rgb:
+        # Mirror linear nature of algorithm on the negative axis
+        abs_i = abs(i)
+        if abs_i <= et2:
+            result.append(i / 16)
+        else:
+            result.append(math.copysign(math.pow(abs_i, 1.8), i))
+    return result
 
 
 def gam_prophoto(rgb):
@@ -1082,7 +1129,16 @@ def gam_prophoto(rgb):
     """
 
     et = 1 / 512
-    return [math.pow(c, 1 / 1.8) if c >= et else 16 * c for c in rgb]
+
+    result = []
+    for i in rgb:
+        # Mirror linear nature of algorithm on the negative axis
+        abs_i = abs(i)
+        if abs_i >= et:
+            result.append(math.copysign(math.pow(abs_i, 1 / 1.8), i))
+        else:
+            result.append(16 * i)
+    return result
 
 
 def lin_a98rgb(rgb):
@@ -1116,7 +1172,15 @@ def lin_srgb(rgb):
     https://en.wikipedia.org/wiki/SRGB
     """
 
-    return [(i / 12.92) if i < 0.04045 else math.pow((i + 0.055) / 1.055, 2.4) for i in rgb]
+    result = []
+    for i in rgb:
+        # Mirror linear nature of algorithm on the negative axis
+        abs_i = abs(i)
+        if abs_i < 0.04045:
+            result.append(i / 12.92)
+        else:
+            result.append(math.copysign(math.pow((abs_i + 0.055) / 1.055, 2.4), i))
+    return result
 
 
 def gam_srgb(rgb):
@@ -1126,7 +1190,15 @@ def gam_srgb(rgb):
     https://en.wikipedia.org/wiki/SRGB
     """
 
-    return [(1.055 * math.pow(i, 1 / 2.4) - 0.055) if i > 0.0031308 else (12.92 * i) for i in rgb]
+    result = []
+    for i in rgb:
+        # Mirror linear nature of algorithm on the negative axis
+        abs_i = abs(i)
+        if abs_i > 0.0031308:
+            result.append(math.copysign((1.055 * math.pow(abs_i, 1 / 2.4) - 0.055), i))
+        else:
+            result.append(12.92 * i)
+    return result
 
 
 ############
