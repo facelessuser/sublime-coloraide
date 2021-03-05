@@ -1,6 +1,7 @@
 """Colors."""
 from .hsv import HSV
 from .srgb import SRGB
+from .srgb_linear import SRGB_Linear
 from .hsl import HSL
 from .hwb import HWB
 from .lab import LAB
@@ -18,7 +19,7 @@ DEF_FIT = "lch-chroma"
 DEF_DELTA_E = "76"
 
 SUPPORTED = (
-    HSL, HWB, LAB, LCH, SRGB, HSV,
+    HSL, HWB, LAB, LCH, SRGB, SRGB_Linear, HSV,
     Display_P3, A98_RGB, ProPhoto_RGB, Rec2020, XYZ
 )
 
@@ -237,11 +238,16 @@ class Color:
             return self.new(obj.space(), obj.coords(), obj.alpha)
         return self
 
-    def interpolate(self, color, *, space="lab", progress=None, out_space=None, adjust=None, hue=util.DEF_HUE_ADJ):
+    def interpolate(
+        self, color, *, space="lab", out_space=None, progress=None, adjust=None, hue=util.DEF_HUE_ADJ,
+        premultiplied=False
+    ):
         """Interpolate."""
 
         color = self._handle_color_input(color)
-        interp = self._color.interpolate(color, space=space, progress=progress, out_space=None, adjust=adjust, hue=hue)
+        interp = self._color.interpolate(
+            color, space=space, progress=progress, out_space=None, adjust=adjust, hue=hue, premultiplied=premultiplied
+        )
         return functools.partial(_interpolate, color=self.clone(), interp=interp)
 
     def steps(self, color, *, steps=2, max_steps=1000, max_delta_e=0, **interpolate_args):
