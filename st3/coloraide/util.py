@@ -1,202 +1,167 @@
 """Utilities."""
-import decimal
 import math
-import numbers
-import re
+import warnings
+from functools import wraps
+from . import algebra as alg
+from .types import Vector, VectorLike
+from typing import Any, Callable
 
-RE_FLOAT_TRIM = re.compile(r'^(?P<keep>-?\d+)(?P<trash>\.0+|(?P<keep2>\.\d*[1-9])0+)$')
-NaN = float('nan')
-INF = float('inf')
-ACHROMATIC_THRESHOLD = 0.0005
 DEF_PREC = 5
 DEF_FIT_TOLERANCE = 0.000075
 DEF_ALPHA = 1.0
 DEF_MIX = 0.5
 DEF_HUE_ADJ = "shorter"
-DEF_DISTANCE_SPACE = "lab"
+DEF_INTERPOLATE = "oklab"
 DEF_FIT = "lch-chroma"
+DEF_HARMONY = "oklch"
 DEF_DELTA_E = "76"
 
+# Maximum luminance in PQ is 10,000 cd/m^2
+# Relative XYZ has Y=1 for media white
+# BT.2048 says media white Y=203 at PQ 58
+#
+# This is confirmed here: https://www.itu.int/dms_pub/itu-r/opb/rep/R-REP-BT.2408-3-2019-PDF-E.pdf
+YW = 203
 
-def is_number(value):
-    """Check if value is a number."""
-
-    return isinstance(value, numbers.Number)
-
-
-def is_nan(value):
-    """Print is "not a number"."""
-
-    return math.isnan(value)
+# PQ Constants
+# https://en.wikipedia.org/wiki/High-dynamic-range_video#Perceptual_quantizer
+M1 = 2610 / 16384
+M2 = 2523 / 32
+C1 = 3424 / 4096
+C2 = 2413 / 128
+C3 = 2392 / 128
 
 
-def no_nan(value):
-    """Convert list of numbers or single number to valid numbers."""
+def xy_to_xyz(xy: VectorLike, Y: float = 1.0, scale: float = 1.0) -> Vector:
+    """
+    Convert `xyY` to `xyz`.
 
-    if is_number(value):
-        return 0.0 if is_nan(value) else value
+    In many cases, we are dealing with chromaticity values with no Y value,
+    in this case, assume 1 unless otherwise specified. Generally, scale is
+    also assumed to be between 0 - 1, but allow changing scale if we are
+    dealing with things like 0 - 100, etc.
+    """
+
+    x, y = xy
+    return [0, 0, 0] if y == 0 else [(x * Y) / y, Y, (scale - x - y) * Y / y]
+
+
+def xy_to_uv(xy: VectorLike) -> Vector:
+    """XYZ to UV."""
+
+    u, v = xy_to_uv_1960(xy)
+    return [u, v * (3 / 2)]
+
+
+def uv_to_xy(uv: VectorLike) -> Vector:
+    """XYZ to UV."""
+
+    return uv_1960_to_xy([uv[0], uv[1] * (2 / 3)])
+
+
+def xy_to_uv_1960(xy: VectorLike) -> Vector:
+    """XYZ to UV."""
+
+    x, y = xy
+    denom = (12 * y - 2 * x + 3)
+    if denom != 0:
+        u = (4 * x) / denom
+        v = (6 * y) / denom
     else:
-        return [(0.0 if is_nan(x) else x) for x in value]
+        u = v = 0
+
+    return [u, v]
 
 
-def cmp_coords(c1, c2):
+def uv_1960_to_xy(uv: VectorLike) -> Vector:
+    """XYZ to UV."""
+
+    u, v = uv
+    denom = (2 * u - 8 * v + 4)
+    if denom != 0:
+        x = (3 * u) / denom
+        y = (2 * v) / denom
+    else:
+        x = y = 0
+
+    return [x, y]
+
+
+def xyz_to_xyY(xyz: VectorLike, white: VectorLike) -> Vector:
+    """XYZ to `xyY`."""
+
+    x, y, z = xyz
+    d = x + y + z
+    return [white[0], white[1], y] if d == 0 else [x / d, y / d, y]
+
+
+def pq_st2084_inverse_eotf(
+    values: VectorLike,
+    c1: float = C1,
+    c2: float = C2,
+    c3: float = C3,
+    m1: float = M1,
+    m2: float = M2
+) -> Vector:
+    """Perceptual quantizer (SMPTE ST 2084) - inverse EOTF."""
+
+    adjusted = []
+    for c in values:
+        c = alg.npow(c / 10000, m1)
+        r = (c1 + c2 * c) / (1 + c3 * c)
+        adjusted.append(alg.npow(r, m2))
+    return adjusted
+
+
+def pq_st2084_eotf(
+    values: VectorLike,
+    c1: float = C1,
+    c2: float = C2,
+    c3: float = C3,
+    m1: float = M1,
+    m2: float = M2
+) -> Vector:
+    """Perceptual quantizer (SMPTE ST 2084) - EOTF."""
+
+    im1 = 1 / m1
+    im2 = 1 / m2
+
+    adjusted = []
+    for c in values:
+        c = alg.npow(c, im2)
+        r = (c - c1) / (c2 - c3 * c)
+        adjusted.append(10000 * alg.npow(r, im1))
+    return adjusted
+
+
+def xyz_d65_to_absxyzd65(xyzd65: VectorLike, yw: float = YW) -> Vector:
+    """XYZ D65 to Absolute XYZ D65."""
+
+    return [max(c * yw, 0) for c in xyzd65]
+
+
+def absxyzd65_to_xyz_d65(absxyzd65: VectorLike, yw: float = YW) -> Vector:
+    """Absolute XYZ D65 XYZ D65."""
+
+    return [max(c / yw, 0) for c in absxyzd65]
+
+
+def constrain_hue(hue: float) -> float:
+    """Constrain hue to 0 - 360."""
+
+    return hue % 360 if not alg.is_nan(hue) else hue
+
+
+def cmp_coords(c1: VectorLike, c2: VectorLike) -> bool:
     """Compare coordinates."""
 
-    if is_number(c1):
-        return (math.isnan(c1) and math.isnan(c2)) or c1 == c2
+    if len(c1) != len(c2):
+        return False
     else:
         return all(map(lambda a, b: (math.isnan(a) and math.isnan(b)) or a == b, c1, c2))
 
 
-def dot(a, b):
-    """Get dot product of simple numbers, vectors, and 2D matrices and/or numbers."""
-
-    is_a_num = is_number(a)
-    is_b_num = is_number(b)
-    is_a_vec = not is_a_num and is_number(a[0])
-    is_b_vec = not is_b_num and is_number(b[0])
-    is_a_mat = not is_a_num and not is_a_vec
-    is_b_mat = not is_b_num and not is_b_vec
-
-    if is_a_num or is_b_num:
-        # Trying to dot a number with a vector or a matrix, so just multiply
-        value = multiply(a, b)
-    elif is_a_vec and is_b_vec:
-        # Dot product of two vectors
-        value = sum([x * y for x, y in zip(a, b)])
-    elif is_a_mat and is_b_vec:
-        # Dot product of matrix and a vector
-        value = [sum([x * y for x, y in zip(row, b)]) for row in a]
-    elif is_a_vec and is_b_mat:
-        # Dot product of vector and a matrix
-        value = [sum([x * y for x, y in zip(a, col)]) for col in zip(*b)]
-    else:
-        # Dot product of two matrices
-        value = [[sum(x * y for x, y in zip(row, col)) for col in zip(*b)] for row in a]
-
-    return value
-
-
-def multiply(a, b):
-    """Multiply simple numbers, vectors, and 2D matrices."""
-
-    is_a_num = is_number(a)
-    is_b_num = is_number(b)
-    is_a_vec = not is_a_num and is_number(a[0])
-    is_b_vec = not is_b_num and is_number(b[0])
-    is_a_mat = not is_a_num and not is_a_vec
-    is_b_mat = not is_b_num and not is_b_vec
-
-    if is_a_num and is_b_num:
-        # Multiply two numbers
-        value = a * b
-    elif is_a_num and not is_b_num:
-        # Multiply a number and vector/matrix
-        value = [multiply(a, i) for i in b]
-    elif is_b_num and not is_a_num:
-        # Multiply a vector/matrix and number
-        value = [multiply(i, b) for i in a]
-    elif is_a_vec and is_b_vec:
-        # Multiply two vectors
-        value = [x * y for x, y in zip(a, b)]
-    elif is_a_mat and is_b_vec:
-        # Multiply matrix and a vector
-        value = [[x * y for x, y in zip(row, b)] for row in a]
-    elif is_a_vec and is_b_mat:
-        # Multiply vector and a matrix
-        value = [[x * y for x, y in zip(row, a)] for row in b]
-    else:
-        # Multiply two matrices
-        value = [[x * y for x, y in zip(ra, rb)] for ra, rb in zip(a, b)]
-
-    return value
-
-
-def divide(a, b):
-    """Divide simple numbers, vectors, and 2D matrices."""
-
-    is_a_num = isinstance(a, numbers.Number)
-    is_b_num = isinstance(b, numbers.Number)
-    is_a_vec = not is_a_num and isinstance(a[0], numbers.Number)
-    is_b_vec = not is_b_num and isinstance(b[0], numbers.Number)
-    is_a_mat = not is_a_num and not is_a_vec
-    is_b_mat = not is_b_num and not is_b_vec
-
-    if is_a_num and is_b_num:
-        # Divide two numbers
-        value = a / b
-    elif is_a_num and not is_b_num:
-        # Divide a number and vector/matrix
-        value = [divide(a, i) for i in b]
-    elif is_b_num and not is_a_num:
-        # Divide a vector/matrix and number
-        value = [divide(i, b) for i in a]
-    elif is_a_vec and is_b_vec:
-        # Divide two vectors
-        value = [x / y for x, y in zip(a, b)]
-    elif is_a_mat and is_b_vec:
-        # Divide matrix and a vector
-        value = [[x / y for x, y in zip(row, b)] for row in a]
-    elif is_a_vec and is_b_mat:
-        # Divide vector and a matrix
-        value = [[x / y for x, y in zip(row, a)] for row in b]
-    else:
-        # Divide two matrices
-        value = [[x / y for x, y in zip(ra, rb)] for ra, rb in zip(a, b)]
-
-    return value
-
-
-def cbrt(x):
-    """Cube root."""
-
-    if 0 <= x:
-        return x ** (1.0 / 3.0)
-    return -(-x) ** (1.0 / 3.0)
-
-
-def clamp(value, mn=None, mx=None):
-    """Clamp the value to the the given minimum and maximum."""
-
-    if mn is None and mx is None:
-        return value
-    elif mn is None:
-        return min(value, mx)
-    elif mx is None:
-        return max(value, mn)
-    else:
-        return max(min(value, mx), mn)
-
-
-def adjust_precision(f, p):
-    """Adjust precision and scale."""
-
-    with decimal.localcontext() as ctx:
-        if p > 0:
-            # Set precision
-            ctx.prec = p
-        ctx.rounding = decimal.ROUND_HALF_UP
-
-        if p == -1:
-            # Full precision
-            value = decimal.Decimal(f)
-        elif p == 0:
-            # Just round to integer
-            value = decimal.Decimal(round_half_up(f))
-        else:
-            # Round to precision
-            value = (decimal.Decimal(f) * decimal.Decimal('1.0'))
-            exp = value.as_tuple().exponent
-            if exp < 0 and abs(value.as_tuple().exponent) > p:
-                value = value.quantize(decimal.Decimal(10) ** -p)
-
-        if value.is_zero():
-            value = abs(value)
-
-        return float(value)
-
-
-def fmt_float(f, p=0):
+def fmt_float(f: float, p: int = 0, percent: float = 0.0, offset: float = 0.0) -> str:
     """
     Set float precision and trim precision zeros.
 
@@ -205,21 +170,44 @@ def fmt_float(f, p=0):
     <positive number>: precision level
     """
 
-    value = adjust_precision(f, p)
+    if alg.is_nan(f):
+        return "none"
+
+    value = alg.round_to((f + offset) / (percent * 0.01) if percent else f, p)
     string = ('{{:{}f}}'.format('.53' if p == -1 else '.' + str(p))).format(value)
-    m = RE_FLOAT_TRIM.match(string)
-    if m:
-        string = m.group('keep')
-        if m.group('keep2'):
-            string += m.group('keep2')
-    return string
+    s = string if value.is_integer() and p == 0 else string.rstrip('0').rstrip('.')
+    return '{}%'.format(s) if percent else s
 
 
-def round_half_up(n, scale=0):
-    """Round half up."""
+def deprecated(message: str, stacklevel: int = 2) -> Callable[..., Any]:  # pragma: no cover
+    """
+    Raise a `DeprecationWarning` when wrapped function/method is called.
 
-    if scale == -1:
-        return n
+    Usage:
 
-    mult = 10 ** scale
-    return math.floor(n * mult + 0.5) / mult
+        @deprecated("This method will be removed in version X; use Y instead.")
+        def some_method()"
+            pass
+    """
+
+    def _wrapper(func: Callable[..., Any]) -> Callable[..., Any]:
+        @wraps(func)
+        def _deprecated_func(*args: Any, **kwargs: Any) -> Any:
+            warnings.warn(
+                "'{}' is deprecated. {}".format(func.__name__, message),
+                category=DeprecationWarning,
+                stacklevel=stacklevel
+            )
+            return func(*args, **kwargs)
+        return _deprecated_func
+    return _wrapper
+
+
+def warn_deprecated(message: str, stacklevel: int = 2) -> None:  # pragma: no cover
+    """Warn deprecated."""
+
+    warnings.warn(
+        message,
+        category=DeprecationWarning,
+        stacklevel=stacklevel
+    )

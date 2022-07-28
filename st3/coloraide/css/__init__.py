@@ -1,2 +1,1 @@
-"""CSS."""
-from .colors import Color  # noqa: F401
+"""CSS parsing and serialization."""
