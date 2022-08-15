@@ -55,6 +55,8 @@ from .filters.w3c_filter_effects import Sepia, Brightness, Contrast, Saturate, O
 from .filters.cvd import Protan, Deutan, Tritan
 from .interpolate import Interpolator, Interpolate
 from .interpolate.bspline import BSpline
+from .interpolate.bspline_natural import NaturalBSpline
+from .interpolate.monotone import Monotone
 from .interpolate.linear import Linear
 from .types import Plugin
 from typing import overload, Union, Sequence, Dict, List, Optional, Any, cast, Callable, Tuple, Type, Mapping
@@ -736,6 +738,7 @@ class Color(metaclass=ColorMeta):
         progress: Optional[Union[Mapping[str, Callable[..., float]], Callable[..., float]]] = None,
         hue: str = util.DEF_HUE_ADJ,
         premultiplied: bool = True,
+        extrapolate: bool = False,
         method: str = "linear",
         **kwargs: Any
     ) -> Interpolator:
@@ -760,6 +763,7 @@ class Color(metaclass=ColorMeta):
             progress=progress,
             hue=hue,
             premultiplied=premultiplied,
+            extrapolate=extrapolate,
             **kwargs
         )
 
@@ -944,6 +948,8 @@ Color.register(
 
         # Interpolation
         Linear(),
-        BSpline()
+        BSpline(),
+        NaturalBSpline(),
+        Monotone()
     ]
 )
